@@ -2,10 +2,12 @@
 
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import Link from 'next/link';
 import FileUpload from '@/components/FileUpload';
 import FileList from '@/components/FileList';
 import SheetTabs from '@/components/SheetTabs';
 import { ExcelFile, ParsedExcelData, SheetData } from '@/types/excel';
+import { supabase, InventoryRow } from '@/lib/supabase';
 
 interface FileWithData {
   file: ExcelFile;
@@ -18,6 +20,8 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
   const [searchTerm, setSearchTerm] = useState('');
   const [sortColumn, setSortColumn] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // 검색 및 정렬된 데이터
   const filteredAndSortedData = useMemo(() => {
@@ -99,6 +103,76 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
     }
   };
 
+  // Supabase '재고' 테이블에 일괄 저장
+  const handleSaveToSupabase = async () => {
+    if (filteredAndSortedData.length === 0) {
+      setSaveResult({ success: false, message: '저장할 데이터가 없습니다.' });
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveResult(null);
+
+    try {
+      // 헤더를 키로 사용하여 각 행을 객체로 변환
+      const inventoryData: InventoryRow[] = filteredAndSortedData.map((row) => {
+        const rowObj: InventoryRow = {};
+        data.headers.forEach((header, index) => {
+          // 헤더 이름을 키로, 셀 값을 값으로 설정
+          const key = header.trim() || `column_${index + 1}`;
+          rowObj[key] = row[index] ?? null;
+        });
+        return rowObj;
+      });
+
+      // Supabase에 일괄 삽입 (배치 처리)
+      const batchSize = 1000; // 한 번에 삽입할 행 수
+      let insertedCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < inventoryData.length; i += batchSize) {
+        const batch = inventoryData.slice(i, i + batchSize);
+        
+        const { data: insertedData, error } = await supabase
+          .from('재고')
+          .insert(batch)
+          .select();
+
+        if (error) {
+          console.error('Supabase insert error:', error);
+          errorCount += batch.length;
+        } else {
+          insertedCount += insertedData?.length ?? 0;
+        }
+      }
+
+      if (errorCount === 0) {
+        setSaveResult({
+          success: true,
+          message: `${insertedCount.toLocaleString()}개의 행이 성공적으로 저장되었습니다.`,
+        });
+      } else if (insertedCount > 0) {
+        setSaveResult({
+          success: true,
+          message: `${insertedCount.toLocaleString()}개 저장 완료, ${errorCount.toLocaleString()}개 실패`,
+        });
+      } else {
+        setSaveResult({
+          success: false,
+          message: '저장에 실패했습니다. Supabase 테이블 구조를 확인해주세요.',
+        });
+      }
+    } catch (error) {
+      console.error('Save to Supabase error:', error);
+      setSaveResult({
+        success: false,
+        message: '저장 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // 컬럼 너비 계산
   const columnWidths = useMemo(() => {
     const minWidth = 120;
@@ -124,25 +198,25 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0) + 80; // +80 for row number column
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-lg overflow-hidden animate-fade-in">
+    <div className="bg-[#16213e] rounded-lg border border-[#0f3460] overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="px-4 py-3 border-b border-[#0f3460] bg-[#1a1a2e]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
+            <h3 className="text-base font-semibold text-white">
               {sheetName}
             </h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-gray-400">
               총 {filteredAndSortedData.length.toLocaleString()}개의 행 
-              <span className="ml-2 text-xs text-indigo-500">(무한 스크롤)</span>
+              <span className="ml-2 text-emerald-400">(무한 스크롤)</span>
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-wrap gap-2">
             {/* Search */}
             <div className="relative">
               <svg
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400"
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -159,16 +233,16 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
                 placeholder="검색..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 pr-4 py-2 w-full sm:w-64 bg-slate-100 dark:bg-slate-700 border-0 rounded-xl text-slate-800 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                className="pl-9 pr-4 py-1.5 w-full sm:w-52 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
               />
             </div>
 
             {/* Export Button */}
             <button
               onClick={handleExport}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-medium transition-colors"
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg font-medium transition-colors"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -178,18 +252,64 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
               </svg>
               내보내기
             </button>
+
+            {/* Save to Supabase Button */}
+            <button
+              onClick={handleSaveToSupabase}
+              disabled={isSaving || filteredAndSortedData.length === 0}
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                isSaving
+                  ? 'bg-indigo-700 cursor-not-allowed'
+                  : 'bg-indigo-600 hover:bg-indigo-500'
+              } text-white disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              {isSaving ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  저장 중...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
+                    />
+                  </svg>
+                  DB 저장
+                </>
+              )}
+            </button>
           </div>
         </div>
+
+        {/* Save Result Message */}
+        {saveResult && (
+          <div
+            className={`mt-2 px-3 py-1.5 rounded-lg text-xs font-medium ${
+              saveResult.success
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : 'bg-red-500/20 text-red-400 border border-red-500/30'
+            }`}
+          >
+            {saveResult.success ? '✓' : '✕'} {saveResult.message}
+          </div>
+        )}
       </div>
 
       {/* Virtualized Table Container */}
-      <div className="overflow-x-auto">
-        <div style={{ minWidth: totalWidth }}>
+      <div className="overflow-x-auto" dir="ltr">
+        <div style={{ minWidth: totalWidth }} className="text-left">
           {/* Table Header - Fixed */}
-          <div className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
+          <div className="sticky top-0 z-10 bg-[#0f3460] border-b border-[#1a1a2e]">
             <div className="flex">
               {/* Row Number Header */}
-              <div className="flex-shrink-0 w-20 px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              <div className="flex-shrink-0 w-16 px-3 py-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                 #
               </div>
               {/* Column Headers */}
@@ -198,13 +318,13 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
                   key={index}
                   onClick={() => handleSort(index)}
                   style={{ width: columnWidths[index] }}
-                  className="flex-shrink-0 px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors select-none"
+                  className="flex-shrink-0 px-3 py-2 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-[#1a1a2e] transition-colors select-none border-l border-[#1a1a2e]"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     <span className="truncate">{header}</span>
                     {sortColumn === index && (
                       <svg
-                        className={`w-4 h-4 flex-shrink-0 transition-transform ${
+                        className={`w-3 h-3 flex-shrink-0 transition-transform text-emerald-400 ${
                           sortDirection === 'desc' ? 'rotate-180' : ''
                         }`}
                         fill="none"
@@ -229,10 +349,10 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
           <div
             ref={parentRef}
             className="overflow-y-auto"
-            style={{ height: 'calc(100vh - 420px)', minHeight: '400px' }}
+            style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}
           >
             {filteredAndSortedData.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-slate-500 dark:text-slate-400">
+              <div className="flex items-center justify-center h-full text-gray-500">
                 데이터가 없습니다.
               </div>
             ) : (
@@ -256,12 +376,12 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      className={`flex items-center border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${
-                        virtualRow.index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50/50 dark:bg-slate-800/50'
+                      className={`flex items-center border-b border-[#0f3460]/50 hover:bg-[#0f3460]/50 transition-colors ${
+                        virtualRow.index % 2 === 0 ? 'bg-[#16213e]' : 'bg-[#1a1a2e]'
                       }`}
                     >
                       {/* Row Number */}
-                      <div className="flex-shrink-0 w-20 px-4 py-3 text-sm text-slate-400 dark:text-slate-500 font-mono">
+                      <div className="flex-shrink-0 w-16 px-3 py-2 text-xs text-gray-500 font-mono">
                         {(virtualRow.index + 1).toLocaleString()}
                       </div>
                       {/* Cells */}
@@ -269,7 +389,7 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
                         <div
                           key={cellIndex}
                           style={{ width: columnWidths[cellIndex] }}
-                          className="flex-shrink-0 px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
+                          className="flex-shrink-0 px-3 py-2 text-sm text-gray-200 border-l border-[#0f3460]/30"
                         >
                           <span 
                             className="block truncate" 
@@ -289,8 +409,8 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
       </div>
 
       {/* Scroll Progress Indicator */}
-      <div className="px-6 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
-        <div className="flex items-center justify-between text-sm text-slate-500 dark:text-slate-400">
+      <div className="px-4 py-2 border-t border-[#0f3460] bg-[#1a1a2e]">
+        <div className="flex items-center justify-between text-xs text-gray-500">
           <span>
             {rowVirtualizer.getVirtualItems().length > 0 && (
               <>
@@ -299,11 +419,11 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
               </>
             )}
           </span>
-          <span className="flex items-center gap-2">
-            <svg className="w-4 h-4 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <span className="flex items-center gap-1 text-emerald-400">
+            <svg className="w-3 h-3 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
-            스크롤하여 더 보기
+            스크롤
           </span>
         </div>
       </div>
@@ -376,14 +496,14 @@ export default function Home() {
     : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950">
+    <div className="min-h-screen bg-[#1a1a2e] text-gray-100">
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-lg bg-white/80 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <header className="sticky top-0 z-50 bg-[#16213e] border-b border-[#0f3460] shadow-lg">
+        <div className="w-full px-6">
+          <div className="flex items-center justify-between h-14">
+            <div className="flex items-center gap-4">
+              <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -393,29 +513,38 @@ export default function Home() {
                 </svg>
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-800 dark:text-white">
+                <h1 className="text-lg font-bold text-white">
                   Excel Manager
                 </h1>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  엑셀 파일 업로드 및 관리
-                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-sm font-medium rounded-full">
+            <div className="flex items-center gap-3">
+              <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-sm font-medium rounded-lg border border-emerald-500/30">
                 {files.length}개 파일
               </span>
+              
+              {/* Management 버튼 */}
+              <Link
+                href="/management"
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-all hover:shadow-lg hover:shadow-indigo-500/25"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                관리
+              </Link>
             </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <main className="w-full px-6 py-6">
+        <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
           {/* Left Column - Upload & File List */}
-          <div className="lg:col-span-1 space-y-6">
+          <div className="xl:col-span-1 space-y-4">
             {/* Upload Section */}
             <FileUpload onUpload={handleUpload} isLoading={isLoading} />
 
@@ -428,15 +557,15 @@ export default function Home() {
             />
           </div>
 
-          {/* Right Column - Data View */}
-          <div className="lg:col-span-2">
+          {/* Right Column - Data View (Wider) */}
+          <div className="xl:col-span-3">
             {selectedFile && currentSheetData ? (
               <>
                 {/* File Info */}
-                <div className="mb-6 p-4 bg-white dark:bg-slate-800 rounded-2xl shadow-lg">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center shadow-lg">
-                      <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="mb-4 p-3 bg-[#16213e] rounded-lg border border-[#0f3460]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -446,10 +575,10 @@ export default function Home() {
                       </svg>
                     </div>
                     <div className="flex-1">
-                      <h2 className="text-lg font-bold text-slate-800 dark:text-white truncate">
+                      <h2 className="text-base font-semibold text-white truncate">
                         {selectedFile.file.name}
                       </h2>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-sm text-slate-500 dark:text-slate-400">
+                      <div className="flex flex-wrap items-center gap-x-3 text-xs text-gray-400">
                         <span>{selectedFile.data.sheets.length}개 시트</span>
                         <span>•</span>
                         <span>{currentSheetData.headers.length}개 컬럼</span>
@@ -472,10 +601,10 @@ export default function Home() {
               </>
             ) : (
               /* Empty State */
-              <div className="flex flex-col items-center justify-center h-96 bg-white dark:bg-slate-800 rounded-2xl shadow-lg">
-                <div className="w-24 h-24 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mb-6">
+              <div className="flex flex-col items-center justify-center h-[600px] bg-[#16213e] rounded-lg border border-[#0f3460]">
+                <div className="w-20 h-20 bg-[#0f3460] rounded-full flex items-center justify-center mb-4">
                   <svg
-                    className="w-12 h-12 text-slate-400"
+                    className="w-10 h-10 text-gray-500"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -488,43 +617,17 @@ export default function Home() {
                     />
                   </svg>
                 </div>
-                <h3 className="text-xl font-semibold text-slate-700 dark:text-slate-200 mb-2">
+                <h3 className="text-lg font-semibold text-gray-300 mb-2">
                   파일을 선택하세요
                 </h3>
-                <p className="text-slate-500 dark:text-slate-400 text-center max-w-sm">
-                  왼쪽에서 엑셀 파일을 업로드하거나 목록에서 파일을 선택하여 데이터를 확인하세요.
+                <p className="text-gray-500 text-center text-sm max-w-sm">
+                  왼쪽에서 엑셀 파일을 업로드하거나<br />목록에서 파일을 선택하여 데이터를 확인하세요.
                 </p>
               </div>
             )}
           </div>
         </div>
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <p className="text-center text-sm text-slate-500 dark:text-slate-400">
-            Built with{' '}
-            <a
-              href="https://nextjs.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-indigo-500 hover:text-indigo-600 font-medium"
-            >
-              Next.js
-            </a>
-            {' '}and{' '}
-            <a
-              href="https://tailwindcss.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-indigo-500 hover:text-indigo-600 font-medium"
-            >
-              Tailwind CSS
-            </a>
-          </p>
-        </div>
-      </footer>
     </div>
   );
 }
