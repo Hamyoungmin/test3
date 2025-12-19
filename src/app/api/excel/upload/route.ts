@@ -28,7 +28,9 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // ExcelJS로 파일 읽기
+    // Node.js 22+ Buffer 타입과 ExcelJS 타입 정의 호환성 문제로 인한 무시
     const workbook = new ExcelJS.Workbook();
+    // @ts-expect-error - ExcelJS 타입이 Node.js 22+ Buffer 제네릭을 지원하지 않음
     await workbook.xlsx.load(buffer);
 
     const parsedData: ParsedExcelData = {
