@@ -28,10 +28,12 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
       const files = e.dataTransfer.files;
       if (files.length > 0) {
         const file = files[0];
-        if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        const validExtensions = ['.xlsx', '.xls', '.csv'];
+        const isValid = validExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+        if (isValid) {
           onUpload(file);
         } else {
-          alert('엑셀 파일(.xlsx, .xls)만 업로드 가능합니다.');
+          alert('엑셀 파일(.xlsx, .xls, .csv)만 업로드 가능합니다.');
         }
       }
     },
@@ -68,7 +70,7 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
     >
       <input
         type="file"
-        accept=".xlsx,.xls"
+        accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
         onChange={handleFileSelect}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
         disabled={isLoading}
@@ -112,7 +114,7 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
                 {isDragging ? '여기에 파일을 놓으세요' : '엑셀 파일을 드래그하거나 클릭하세요'}
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                .xlsx, .xls 파일 지원
+                .xlsx, .xls, .csv 파일 지원
               </p>
             </div>
 

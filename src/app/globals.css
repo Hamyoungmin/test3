@@ -40,37 +40,12 @@
   }
 }
 
-@keyframes slide-down {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -20px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-5px); }
-  75% { transform: translateX(5px); }
-}
-
 .animate-fade-in {
   animation: fadeIn 0.5s ease forwards;
 }
 
 .animate-slide-in {
   animation: slideIn 0.4s ease forwards;
-}
-
-.animate-slide-down {
-  animation: slide-down 0.3s ease forwards;
-}
-
-.animate-shake {
-  animation: shake 0.3s ease;
 }
 
 .animate-pulse-glow {
@@ -110,4 +85,84 @@
   ::-webkit-scrollbar-thumb:hover {
     background: #64748b;
   }
+}
+
+/* Force LTR (Left-to-Right) direction for tables */
+table,
+[dir="ltr"],
+.overflow-x-auto {
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: isolate;
+}
+
+/* Table horizontal scroll container */
+.table-scroll-container {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  direction: ltr;
+}
+
+/* Ensure table cells are LTR */
+table th,
+table td {
+  direction: ltr;
+  text-align: left;
+}
+
+/* Dark theme custom scrollbar for table containers */
+.overflow-x-auto::-webkit-scrollbar {
+  height: 10px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: #0f3460;
+  border-radius: 5px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #1a1a2e;
+  border-radius: 5px;
+  border: 2px solid #0f3460;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: #2a2a4e;
+}
+
+/* Drag scroll cursor styles */
+.cursor-grab {
+  cursor: grab !important;
+}
+
+.cursor-grabbing {
+  cursor: grabbing !important;
+}
+
+.cursor-grabbing * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+/* Smooth scroll behavior */
+.scroll-smooth {
+  scroll-behavior: smooth;
+}
+
+/* Disable text selection during drag */
+.select-none {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Active drag state */
+.dragging {
+  cursor: grabbing !important;
+}
+
+.dragging * {
+  pointer-events: none;
 }

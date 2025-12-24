@@ -7,7 +7,8 @@ import FileUpload from '@/components/FileUpload';
 import FileList from '@/components/FileList';
 import SheetTabs from '@/components/SheetTabs';
 import { ExcelFile, ParsedExcelData, SheetData } from '@/types/excel';
-import { supabase, InventoryRow } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
+import { useDragScroll } from '@/hooks/useDragScroll';
 
 interface FileWithData {
   file: ExcelFile;
@@ -22,6 +23,9 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [isSaving, setIsSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
+  
+  // 드래그 스크롤 훅
+  const { containerRef: dragScrollRef, isDragging } = useDragScroll({ sensitivity: 1.2, smoothness: 0.9 });
 
   // 검색 및 정렬된 데이터
   const filteredAndSortedData = useMemo(() => {
@@ -104,6 +108,7 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
   };
 
   // Supabase '재고' 테이블에 일괄 저장
+  // 각 행을 { "컬럼명": "값" } 형태의 JSON 객체로 만들어서 data 컬럼에 저장
   const handleSaveToSupabase = async () => {
     if (filteredAndSortedData.length === 0) {
       setSaveResult({ success: false, message: '저장할 데이터가 없습니다.' });
@@ -114,15 +119,23 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
     setSaveResult(null);
 
     try {
-      // 헤더를 키로 사용하여 각 행을 객체로 변환
-      const inventoryData: InventoryRow[] = filteredAndSortedData.map((row) => {
-        const rowObj: InventoryRow = {};
+      // 첫 번째 행(헤더)의 모든 내용을 컬럼명으로 사용하여 JSON 객체 생성
+      const inventoryData = filteredAndSortedData.map((row, rowIndex) => {
+        // 각 행을 { "헤더1": "값1", "헤더2": "값2", ... } 형태로 변환
+        const rowData: Record<string, string | number | boolean | null> = {};
+        
         data.headers.forEach((header, index) => {
-          // 헤더 이름을 키로, 셀 값을 값으로 설정
-          const key = header.trim() || `column_${index + 1}`;
-          rowObj[key] = row[index] ?? null;
+          // 헤더 이름을 그대로 키로 사용 (빈 헤더는 Column_N 형식으로)
+          const key = header.trim() || `Column_${index + 1}`;
+          rowData[key] = row[index] ?? null;
         });
-        return rowObj;
+
+        // DB 컬럼명과 정확히 일치: file_name, row_index, data
+        return {
+          file_name: sheetName,      // 시트명/파일명
+          row_index: rowIndex,       // 행 인덱스 (0부터 시작)
+          data: rowData,             // JSONB 컬럼에 저장될 JSON 객체
+        };
       });
 
       // Supabase에 일괄 삽입 (배치 처리)
@@ -149,7 +162,7 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
       if (errorCount === 0) {
         setSaveResult({
           success: true,
-          message: `${insertedCount.toLocaleString()}개의 행이 성공적으로 저장되었습니다.`,
+          message: `${insertedCount.toLocaleString()}개의 행이 성공적으로 저장되었습니다. (컬럼: ${data.headers.length}개)`,
         });
       } else if (insertedCount > 0) {
         setSaveResult({
@@ -159,7 +172,7 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
       } else {
         setSaveResult({
           success: false,
-          message: '저장에 실패했습니다. Supabase 테이블 구조를 확인해주세요.',
+          message: '저장에 실패했습니다. Supabase 테이블에 "data" (jsonb) 컬럼이 있는지 확인해주세요.',
         });
       }
     } catch (error) {
@@ -302,9 +315,14 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
         )}
       </div>
 
-      {/* Virtualized Table Container */}
-      <div className="overflow-x-auto" dir="ltr">
-        <div style={{ minWidth: totalWidth }} className="text-left">
+      {/* Virtualized Table Container - LTR 정렬 + 드래그 스크롤 */}
+      <div 
+        ref={dragScrollRef}
+        className={`overflow-x-auto overflow-y-hidden select-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        dir="ltr"
+        style={{ direction: 'ltr' }}
+      >
+        <div style={{ minWidth: Math.max(totalWidth, 800) }} className="text-left">
           {/* Table Header - Fixed */}
           <div className="sticky top-0 z-10 bg-[#0f3460] border-b border-[#1a1a2e]">
             <div className="flex">

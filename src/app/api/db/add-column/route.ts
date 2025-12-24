@@ -1,17 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// Service Role Key를 사용하여 DDL 쿼리 실행
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  }
-);
+import { createServerSupabaseClient } from '@/lib/supabase';
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,6 +33,9 @@ export async function POST(request: NextRequest) {
     };
 
     const sqlType = typeMap[columnType] || 'TEXT';
+
+    // 서버 측 Supabase 클라이언트 생성 (함수 내에서 생성)
+    const supabaseAdmin = createServerSupabaseClient();
 
     // ALTER TABLE로 새 컬럼 추가
     const { error } = await supabaseAdmin.rpc('exec_sql', {

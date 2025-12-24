@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { useDragScroll } from '@/hooks/useDragScroll';
 
 type CellValue = string | number | boolean | null;
 type RowData = Record<string, CellValue> & { id: number };
@@ -12,78 +13,6 @@ interface EditingCell {
   rowId: number;
   column: string;
   value: CellValue;
-}
-
-// 토스트 메시지 컴포넌트
-function Toast({ 
-  message, 
-  type, 
-  onClose 
-}: { 
-  message: string; 
-  type: 'success' | 'error' | 'info'; 
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, type === 'error' ? 5000 : 3000);
-    return () => clearTimeout(timer);
-  }, [onClose, type]);
-
-  const bgColor = {
-    success: 'bg-emerald-600',
-    error: 'bg-red-600',
-    info: 'bg-indigo-600',
-  }[type];
-
-  const icon = {
-    success: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-      </svg>
-    ),
-    error: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-    info: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  }[type];
-
-  return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] animate-slide-down">
-      <div className={`${bgColor} text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 min-w-[300px]`}>
-        {icon}
-        <span className="flex-1 text-sm font-medium">{message}</span>
-        <button
-          onClick={onClose}
-          className="p-1 hover:bg-white/20 rounded-lg transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// 로딩 오버레이 컴포넌트
-function LoadingOverlay({ message = '로딩 중...' }: { message?: string }) {
-  return (
-    <div className="absolute inset-0 bg-[#1a1a2e]/80 backdrop-blur-sm flex items-center justify-center z-50 rounded-lg">
-      <div className="flex flex-col items-center gap-4">
-        <div className="relative">
-          <div className="w-16 h-16 border-4 border-indigo-500/30 rounded-full"></div>
-          <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
-        </div>
-        <p className="text-gray-300 text-sm font-medium animate-pulse">{message}</p>
-      </div>
-    </div>
-  );
 }
 
 // 숫자 전용 컬럼 목록
@@ -347,7 +276,7 @@ function AddColumnModal({
 }
 
 // 초기 빈 행 개수 및 추가 단위
-const INITIAL_EMPTY_ROWS = 15;
+const INITIAL_EMPTY_ROWS = 20;  // 최소 20행 보장
 const EMPTY_ROWS_INCREMENT = 10;
 
 // 정렬 타입
@@ -355,14 +284,6 @@ type SortDirection = 'asc' | 'desc' | null;
 interface SortConfig {
   column: string | null;
   direction: SortDirection;
-}
-
-// Undo 히스토리 타입
-interface UndoAction {
-  type: 'delete';
-  row: RowData;
-  index: number;
-  timestamp: number;
 }
 
 export default function EditPage() {
@@ -377,8 +298,7 @@ export default function EditPage() {
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [modifiedRows, setModifiedRows] = useState<Set<number>>(new Set()); // 수정된 기존 행
   const [newRows, setNewRows] = useState<Map<number, RowData>>(new Map());   // 새로 추가된 행 (임시 음수 ID → 데이터)
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [isTableLoading, setIsTableLoading] = useState(false); // 테이블 로딩 상태 (오버레이용)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
   const [emptyRowCount, setEmptyRowCount] = useState(INITIAL_EMPTY_ROWS);
   
@@ -386,12 +306,14 @@ export default function EditPage() {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ column: null, direction: null });
   // 검색 필터
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // Undo 히스토리 (삭제된 행 복원용)
-  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
-  const MAX_UNDO_HISTORY = 20; // 최대 20개까지 기록
 
   const tableRef = useRef<HTMLDivElement>(null);
+  
+  // 드래그 스크롤 훅
+  const { containerRef: dragScrollRef, isDragging } = useDragScroll({ sensitivity: 1.2, smoothness: 0.9 });
+  
+  // 가로 스크롤 끝 감지 상태
+  const [showAddColumnButton, setShowAddColumnButton] = useState(false);
 
   // 저장되지 않은 변경사항 개수
   const unsavedChangesCount = modifiedRows.size + newRows.size;
@@ -470,24 +392,33 @@ export default function EditPage() {
     return [...sortedData, ...mergedEmptyRows];
   }, [sortedData, emptyRows, newRows]);
 
-  // 스크롤 바닥 감지 및 빈 행 추가
+  // 스크롤 감지: 세로 바닥 → 빈 행 추가, 가로 끝 → 컬럼 추가 버튼 표시
   useEffect(() => {
     const container = tableRef.current;
     if (!container) return;
 
     const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      // 바닥에서 50px 이내에 도달하면 빈 행 추가
-      if (scrollHeight - scrollTop - clientHeight < 50) {
+      const { scrollTop, scrollHeight, clientHeight, scrollLeft, scrollWidth, clientWidth } = container;
+      
+      // 세로 스크롤: 바닥에서 100px 이내에 도달하면 빈 행 10개 추가
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      if (isNearBottom) {
         setEmptyRowCount(prev => prev + EMPTY_ROWS_INCREMENT);
       }
+      
+      // 가로 스크롤: 오른쪽 끝에서 50px 이내에 도달하면 컬럼 추가 버튼 표시
+      const isNearRight = scrollWidth - scrollLeft - clientWidth < 50;
+      setShowAddColumnButton(isNearRight);
     };
 
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+    // 초기 상태 체크
+    handleScroll();
 
-  // 데이터 불러오기 (중복 제거)
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [headers.length]); // headers가 변경되면 다시 체크
+
+  // 데이터 불러오기 - data 필드(JSONB)의 모든 키를 자동 추출하여 헤더로 사용
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -504,24 +435,48 @@ export default function EditPage() {
           (item, index, self) => index === self.findIndex((t) => t.id === item.id)
         );
         
-        const allHeaders = Object.keys(uniqueData[0]);
-        // id를 첫번째로
-        const sortedHeaders = ['id', ...allHeaders.filter(h => h !== 'id')];
+        // 모든 행의 data 필드(JSONB)에서 키를 수집하여 헤더로 사용
+        const allDataKeys = new Set<string>();
+        uniqueData.forEach(item => {
+          if (item.data && typeof item.data === 'object') {
+            Object.keys(item.data as object).forEach(key => allDataKeys.add(key));
+          }
+        });
+
+        // 헤더 구성: id + data 필드의 모든 키 (엑셀 컬럼 그대로)
+        const dataHeaders = Array.from(allDataKeys);
+        const sortedHeaders = ['id', ...dataHeaders];
+        
+        // 데이터 변환: data 필드 내용을 펼쳐서 평탄화 (엑셀처럼 보이도록)
+        const flattenedData: RowData[] = uniqueData.map(item => {
+          const flatRow: RowData = { id: item.id };
+          
+          // data 필드의 내용을 펼침
+          if (item.data && typeof item.data === 'object') {
+            Object.entries(item.data as object).forEach(([key, value]) => {
+              flatRow[key] = value as CellValue;
+            });
+          }
+          
+          // 모든 헤더에 대해 값이 없으면 null로 채움
+          dataHeaders.forEach(key => {
+            if (!(key in flatRow)) {
+              flatRow[key] = null;
+            }
+          });
+          
+          return flatRow;
+        });
+        
         setHeaders(sortedHeaders);
-        setData(uniqueData as RowData[]);
+        setData(flattenedData);
       } else {
         setData([]);
         setHeaders([]);
       }
     } catch (err) {
       console.error('Fetch error:', err);
-      const errorMessage = err instanceof Error ? err.message : '';
-      setMessage({ 
-        type: 'error', 
-        text: errorMessage.includes('network') || errorMessage.includes('fetch') 
-          ? '인터넷 연결을 확인하세요.' 
-          : '데이터를 불러오는 중 오류가 발생했습니다.' 
-      });
+      setMessage({ type: 'error', text: '데이터를 불러오는 중 오류가 발생했습니다.' });
     } finally {
       setIsLoading(false);
     }
@@ -537,8 +492,8 @@ export default function EditPage() {
     setEditingCell({ rowId, column, value });
   };
 
-  // 셀 저장 (로컬만 - DB 저장은 일괄 저장 시)
-  const handleSaveCell = (rowId: number, column: string, newValue: CellValue) => {
+  // 셀 저장 - 기존 행은 즉시 DB 업데이트, 새 행은 로컬 저장 후 일괄 저장
+  const handleSaveCell = async (rowId: number, column: string, newValue: CellValue) => {
     setEditingCell(null);
 
     // 숫자 컬럼 유효성 재검사
@@ -584,58 +539,115 @@ export default function EditPage() {
       return;
     }
 
-    // 기존 행 업데이트 (로컬)
+    // 기존 행 - 값이 변경되지 않았으면 스킵
     const currentRow = data.find(r => r.id === rowId);
     if (currentRow && currentRow[column] === newValue) return;
 
-    // 로컬 데이터 업데이트
+    // 로컬 데이터 즉시 업데이트 (UI 반영)
     setData(prev => prev.map(row => 
       row.id === rowId ? { ...row, [column]: newValue } : row
     ));
 
-    // 수정된 행으로 표시
-    setModifiedRows(prev => new Set(prev).add(rowId));
+    // 기존 행: 즉시 DB에 업데이트 (data JSON 객체 전체를 업데이트)
+    try {
+      // 현재 행의 모든 데이터를 data 필드용 JSON 객체로 변환
+      const updatedRow = currentRow ? { ...currentRow, [column]: newValue } : { [column]: newValue };
+      const dataObj: Record<string, CellValue> = {};
+      headers.forEach(h => {
+        if (h !== 'id') {
+          dataObj[h] = updatedRow[h] ?? null;
+        }
+      });
+
+      const { error } = await supabase
+        .from('재고')
+        .update({ data: dataObj })
+        .eq('id', rowId);
+
+      if (error) {
+        console.error('Cell update error:', error);
+        setMessage({ type: 'error', text: '저장 실패. 다시 시도해주세요.' });
+        // 실패 시 로컬 데이터 롤백
+        setData(prev => prev.map(row => 
+          row.id === rowId ? { ...row, [column]: currentRow?.[column] ?? null } : row
+        ));
+        setTimeout(() => setMessage(null), 3000);
+        return;
+      }
+
+      // 성공 - 수정된 행 표시 해제 (이미 DB에 저장됨)
+      setModifiedRows(prev => {
+        const updated = new Set(prev);
+        updated.delete(rowId);
+        return updated;
+      });
+
+    } catch (err) {
+      console.error('Save cell error:', err);
+      setMessage({ type: 'error', text: '네트워크 오류. 다시 시도해주세요.' });
+      setTimeout(() => setMessage(null), 3000);
+    }
   };
 
-  // 일괄 저장 (Upsert)
+  // 일괄 저장 (Upsert) - data 필드(JSONB)에 JSON 객체로 저장
   const handleBatchSave = async () => {
     if (unsavedChangesCount === 0) {
       setMessage({ type: 'error', text: '저장할 변경사항이 없습니다.' });
+      setTimeout(() => setMessage(null), 2000);
       return;
     }
 
     setIsSaving(true);
-    setIsTableLoading(true);
-    setMessage({ type: 'info', text: '일괄 저장 중...' });
+    setMessage({ type: 'success', text: '일괄 저장 중...' });
 
     try {
       let savedCount = 0;
       let insertedCount = 0;
 
-      // 1. 수정된 기존 행 업데이트 (Upsert)
+      // 행 데이터를 data 필드(JSONB)로 변환하는 헬퍼 함수
+      const rowToDataField = (row: RowData, includeMetadata = false, rowIdx = 0) => {
+        const dataObj: Record<string, CellValue> = {};
+        headers.forEach(h => {
+          if (h !== 'id' && h !== 'file_name' && h !== 'row_index') {
+            dataObj[h] = row[h];
+          }
+        });
+        
+        // 새 행 삽입 시 file_name, row_index 포함
+        if (includeMetadata) {
+          return {
+            file_name: fileId || 'unknown',
+            row_index: rowIdx,
+            data: dataObj,
+          };
+        }
+        return { data: dataObj };
+      };
+
+      // 1. 수정된 기존 행 업데이트 (data 필드만 업데이트)
       if (modifiedRows.size > 0) {
         const rowsToUpdate = data.filter(row => modifiedRows.has(row.id));
         
         for (const row of rowsToUpdate) {
-          const { id, ...rowData } = row;
+          const updatePayload = rowToDataField(row);
           const { error } = await supabase
             .from('재고')
-            .update(rowData)
-            .eq('id', id);
+            .update(updatePayload)
+            .eq('id', row.id);
 
           if (error) {
-            console.error(`Update error for row ${id}:`, error);
+            console.error(`Update error for row ${row.id}:`, error);
             throw error;
           }
           savedCount++;
         }
       }
 
-      // 2. 새로 추가된 행 삽입
+      // 2. 새로 추가된 행 삽입 (file_name, row_index, data 포함)
       if (newRows.size > 0) {
-        const rowsToInsert = Array.from(newRows.values()).map(row => {
-          const { id, ...rowData } = row; // 임시 음수 ID 제외
-          return rowData;
+        const currentMaxIndex = data.length;
+        const rowsToInsert = Array.from(newRows.values()).map((row, idx) => {
+          return rowToDataField(row, true, currentMaxIndex + idx);
         });
 
         const { data: insertedData, error } = await supabase
@@ -649,8 +661,17 @@ export default function EditPage() {
         }
 
         if (insertedData) {
-          // 삽입된 행을 data에 추가
-          setData(prev => [...prev, ...(insertedData as RowData[])]);
+          // 삽입된 행을 data에 추가 (평탄화해서 추가)
+          const flattenedInserted: RowData[] = insertedData.map(item => {
+            const flatRow: RowData = { id: item.id };
+            if (item.data && typeof item.data === 'object') {
+              Object.entries(item.data as object).forEach(([key, value]) => {
+                flatRow[key] = value as CellValue;
+              });
+            }
+            return flatRow;
+          });
+          setData(prev => [...prev, ...flattenedInserted]);
           insertedCount = insertedData.length;
         }
       }
@@ -667,24 +688,15 @@ export default function EditPage() {
 
     } catch (err) {
       console.error('Batch save error:', err);
-      const errorMessage = err instanceof Error ? err.message : '알 수 없는 오류';
-      setMessage({ 
-        type: 'error', 
-        text: `저장 실패: ${errorMessage.includes('network') || errorMessage.includes('fetch') ? '인터넷 연결을 확인하세요.' : '서버 오류가 발생했습니다.'}` 
-      });
+      setMessage({ type: 'error', text: '일괄 저장 중 오류가 발생했습니다.' });
     } finally {
       setIsSaving(false);
-      setIsTableLoading(false);
     }
   };
 
-  // 행 삭제 (Undo 지원)
+  // 행 삭제
   const handleDeleteRow = async (rowId: number) => {
-    // 삭제할 행 찾기
-    const rowToDelete = data.find(r => r.id === rowId);
-    if (!rowToDelete) return;
-
-    const rowIndex = data.findIndex(r => r.id === rowId);
+    if (!confirm('이 행을 삭제하시겠습니까?')) return;
 
     try {
       const { error } = await supabase
@@ -694,106 +706,54 @@ export default function EditPage() {
 
       if (error) throw error;
 
-      // Undo 스택에 저장
-      setUndoStack(prev => {
-        const newStack = [...prev, {
-          type: 'delete' as const,
-          row: { ...rowToDelete },
-          index: rowIndex,
-          timestamp: Date.now(),
-        }];
-        // 최대 히스토리 초과 시 오래된 것 제거
-        if (newStack.length > MAX_UNDO_HISTORY) {
-          return newStack.slice(-MAX_UNDO_HISTORY);
-        }
-        return newStack;
-      });
-
       setData(prev => prev.filter(row => row.id !== rowId));
-      setMessage({ type: 'success', text: '삭제됨 (Ctrl+Z로 복원 가능)' });
-      setTimeout(() => setMessage(null), 3000);
+      setMessage({ type: 'success', text: '삭제되었습니다.' });
+      setTimeout(() => setMessage(null), 2000);
     } catch (err) {
       console.error('Delete error:', err);
       setMessage({ type: 'error', text: '삭제 중 오류가 발생했습니다.' });
     }
   };
 
-  // 실행 취소 (Undo)
-  const handleUndo = useCallback(async () => {
-    if (undoStack.length === 0) {
-      setMessage({ type: 'error', text: '실행 취소할 항목이 없습니다.' });
-      setTimeout(() => setMessage(null), 2000);
-      return;
-    }
-
-    const lastAction = undoStack[undoStack.length - 1];
-
-    if (lastAction.type === 'delete') {
-      try {
-        // DB에 다시 삽입
-        const { id, ...rowData } = lastAction.row;
-        const { data: restored, error } = await supabase
-          .from('재고')
-          .insert([rowData])
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        if (restored) {
-          // 원래 위치에 삽입 (가능한 경우)
-          setData(prev => {
-            const newData = [...prev];
-            const insertIndex = Math.min(lastAction.index, newData.length);
-            newData.splice(insertIndex, 0, restored as RowData);
-            return newData;
-          });
-
-          // Undo 스택에서 제거
-          setUndoStack(prev => prev.slice(0, -1));
-
-          setMessage({ type: 'success', text: '삭제가 취소되었습니다.' });
-          setTimeout(() => setMessage(null), 2000);
-        }
-      } catch (err) {
-        console.error('Undo error:', err);
-        setMessage({ type: 'error', text: '실행 취소 중 오류가 발생했습니다.' });
-      }
-    }
-  }, [undoStack]);
-
-  // Ctrl+Z 키보드 단축키
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        handleUndo();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo]);
-
-  // 새 행 추가
+  // 새 행 추가 - file_name, row_index, data 포함
   const handleAddRow = async () => {
     try {
-      // 빈 행 생성 (헤더 기반)
-      const newRow: Record<string, CellValue> = {};
+      // data 필드에 저장할 빈 JSON 객체 생성
+      const dataObj: Record<string, CellValue> = {};
       headers.forEach(h => {
-        if (h !== 'id') newRow[h] = null;
+        if (h !== 'id' && h !== 'file_name' && h !== 'row_index') {
+          dataObj[h] = null;
+        }
       });
 
       const { data: inserted, error } = await supabase
         .from('재고')
-        .insert([newRow])
+        .insert([{
+          file_name: fileId || 'unknown',
+          row_index: data.length,
+          data: dataObj,
+        }])
         .select()
         .single();
 
       if (error) throw error;
 
       if (inserted) {
-        setData(prev => [...prev, inserted as RowData]);
+        // 평탄화해서 추가
+        const flatRow: RowData = { id: inserted.id };
+        if (inserted.data && typeof inserted.data === 'object') {
+          Object.entries(inserted.data as object).forEach(([key, value]) => {
+            flatRow[key] = value as CellValue;
+          });
+        }
+        // 모든 헤더에 대해 값이 없으면 null
+        headers.forEach(h => {
+          if (h !== 'id' && !(h in flatRow)) {
+            flatRow[h] = null;
+          }
+        });
+        
+        setData(prev => [...prev, flatRow]);
         setMessage({ type: 'success', text: '새 행이 추가되었습니다.' });
         setTimeout(() => setMessage(null), 2000);
       }
@@ -803,8 +763,8 @@ export default function EditPage() {
     }
   };
 
-  // 새 컬럼 추가
-  const handleAddColumn = async (columnName: string, columnType: string) => {
+  // 새 컬럼 추가 - JSONB 사용으로 DB 스키마 변경 불필요, 로컬에서 바로 추가
+  const handleAddColumn = async (columnName: string, _columnType: string) => {
     try {
       // 이미 존재하는 컬럼인지 확인
       if (headers.includes(columnName)) {
@@ -812,18 +772,7 @@ export default function EditPage() {
         return;
       }
 
-      const response = await fetch('/api/db/add-column', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ columnName, columnType }),
-      });
-
-      const result = await response.json();
-
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-
+      // JSONB 사용으로 실제 DB 스키마 변경 없이 로컬에서 바로 추가
       // 헤더에 새 컬럼 추가
       setHeaders(prev => [...prev, columnName]);
 
@@ -833,8 +782,17 @@ export default function EditPage() {
         [columnName]: null,
       })));
 
-      setMessage({ type: 'success', text: `'${columnName}' 컬럼이 추가되었습니다.` });
-      setTimeout(() => setMessage(null), 3000);
+      // 기존 행들에 새 컬럼 추가를 위해 수정됨으로 표시
+      if (data.length > 0) {
+        setModifiedRows(prev => {
+          const updated = new Set(prev);
+          data.forEach(row => updated.add(row.id));
+          return updated;
+        });
+      }
+
+      setMessage({ type: 'success', text: `'${columnName}' 컬럼이 추가되었습니다. 일괄 저장을 클릭하여 DB에 반영하세요.` });
+      setTimeout(() => setMessage(null), 4000);
       setShowAddColumnModal(false);
     } catch (err) {
       console.error('Add column error:', err);
@@ -921,15 +879,6 @@ export default function EditPage() {
 
   return (
     <div className="min-h-screen bg-[#1a1a2e] text-gray-100">
-      {/* 토스트 메시지 */}
-      {message && (
-        <Toast
-          message={message.text}
-          type={message.type}
-          onClose={() => setMessage(null)}
-        />
-      )}
-
       {/* Header */}
       <header className="sticky top-0 z-50 bg-[#16213e] border-b border-[#0f3460] shadow-lg">
         <div className="w-full px-4">
@@ -959,6 +908,17 @@ export default function EditPage() {
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                   저장 중...
+                </span>
+              )}
+
+              {/* 메시지 표시 */}
+              {message && (
+                <span className={`px-2 py-1 text-xs rounded ${
+                  message.type === 'success' 
+                    ? 'bg-emerald-500/20 text-emerald-400' 
+                    : 'bg-red-500/20 text-red-400'
+                }`}>
+                  {message.text}
                 </span>
               )}
 
@@ -1123,31 +1083,21 @@ export default function EditPage() {
                 정렬 해제
               </button>
             )}
-            {/* Undo 버튼 */}
-            <button
-              onClick={handleUndo}
-              disabled={undoStack.length === 0}
-              className={`flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg transition-colors ${
-                undoStack.length > 0
-                  ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/50'
-                  : 'bg-gray-700/30 text-gray-500 cursor-not-allowed'
-              }`}
-              title={`실행 취소 (Ctrl+Z) - ${undoStack.length}개 기록`}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-              </svg>
-              {undoStack.length > 0 && <span>({undoStack.length})</span>}
-            </button>
           </div>
         </div>
       </div>
 
-      {/* Grid Editor */}
-      <div className="w-full overflow-auto relative" ref={tableRef}>
-        {/* 테이블 로딩 오버레이 */}
-        {isTableLoading && <LoadingOverlay message="데이터 저장 중..." />}
-        
+      {/* Grid Editor - LTR 정렬 + 드래그 스크롤 */}
+      <div 
+        className={`w-full overflow-x-auto overflow-y-auto ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        ref={(el) => {
+          // 두 ref를 모두 연결
+          (tableRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+          (dragScrollRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        }}
+        dir="ltr"
+        style={{ maxHeight: 'calc(100vh - 200px)' }}
+      >
         {data.length === 0 && headers.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-[500px]">
             <div className="w-16 h-16 bg-[#0f3460] rounded-full flex items-center justify-center mb-4">
@@ -1161,7 +1111,7 @@ export default function EditPage() {
             </Link>
           </div>
         ) : (
-          <table dir="ltr" className="w-full border-collapse text-left" style={{ minWidth: headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50 }}>
+          <table className="border-collapse text-left" style={{ minWidth: Math.max(headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50, 800) }}>
             {/* Header */}
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#0f3460]">
@@ -1209,6 +1159,22 @@ export default function EditPage() {
                     </th>
                   );
                 })}
+                {/* 컬럼 추가 버튼 - 항상 맨 오른쪽에 표시 */}
+                <th 
+                  className={`w-12 px-2 py-2 text-center border border-[#1a1a2e] bg-[#0f3460] sticky right-0 z-20 transition-all ${
+                    showAddColumnButton ? 'opacity-100' : 'opacity-50 hover:opacity-100'
+                  }`}
+                >
+                  <button
+                    onClick={() => setShowAddColumnModal(true)}
+                    className="w-8 h-8 flex items-center justify-center bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors"
+                    title="새 컬럼 추가"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </button>
+                </th>
               </tr>
             </thead>
 
@@ -1230,16 +1196,16 @@ export default function EditPage() {
                     transition-colors
                   `}
                 >
-                  {/* 삭제 버튼 (쓰레기통 아이콘) - 빈 행에는 표시 안함 */}
+                  {/* 삭제 버튼 (빈 행에는 표시 안함) */}
                   <td className="w-10 px-1 py-0 text-center border border-[#0f3460]/50 bg-inherit sticky left-0">
                     {!isEmptyRow && (
                       <button
                         onClick={() => handleDeleteRow(row.id)}
-                        className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded transition-all hover:scale-110"
-                        title="행 삭제 (Ctrl+Z로 복원 가능)"
+                        className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded transition-colors"
+                        title="삭제"
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </button>
                     )}
@@ -1290,6 +1256,8 @@ export default function EditPage() {
                       </td>
                     );
                   })}
+                  {/* 컬럼 추가 버튼 자리 (빈 셀) */}
+                  <td className="w-12 border border-[#0f3460]/50 bg-inherit sticky right-0"></td>
                 </tr>
                 );
               })}
@@ -1306,7 +1274,6 @@ export default function EditPage() {
             <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Enter</kbd> 로컬 저장</span>
             <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Esc</kbd> 취소</span>
             <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Tab</kbd> 다음 셀</span>
-            <span><kbd className="px-1.5 py-0.5 bg-amber-500/30 rounded text-amber-300">Ctrl+Z</kbd> 삭제 취소</span>
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
