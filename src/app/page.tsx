@@ -16,7 +16,7 @@ interface FileWithData {
 }
 
 // 무한 스크롤 가상화 테이블 컴포넌트
-function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: string }) {
+function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; sheetName: string; fileName: string }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortColumn, setSortColumn] = useState<number | null>(null);
@@ -132,7 +132,7 @@ function VirtualizedTable({ data, sheetName }: { data: SheetData; sheetName: str
 
         // DB 컬럼명과 정확히 일치: file_name, row_index, data
         return {
-          file_name: sheetName,      // 시트명/파일명
+          file_name: fileName,       // 실제 파일명
           row_index: rowIndex,       // 행 인덱스 (0부터 시작)
           data: rowData,             // JSONB 컬럼에 저장될 JSON 객체
         };
@@ -615,7 +615,7 @@ export default function Home() {
                 />
 
                 {/* Virtualized Data Table */}
-                <VirtualizedTable data={currentSheetData} sheetName={activeSheet} />
+                <VirtualizedTable data={currentSheetData} sheetName={activeSheet} fileName={selectedFile.file.name} />
               </>
             ) : (
               /* Empty State */
