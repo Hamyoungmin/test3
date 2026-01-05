@@ -418,20 +418,39 @@ export default function EditPage() {
     return () => container.removeEventListener('scroll', handleScroll);
   }, [headers.length]); // headers가 변경되면 다시 체크
 
-  // 데이터 불러오기 - data 필드(JSONB)의 모든 키를 자동 추출하여 헤더로 사용
+  // 데이터 불러오기 - 해당 파일의 data 필드(JSONB)의 모든 키를 자동 추출하여 헤더로 사용
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { data: inventoryData, error } = await supabase
-        .from('재고')
-        .select('*')
-        .order('id', { ascending: true });
+      // 해당 파일명의 데이터만 가져오기 (pagination 적용)
+      const decodedFileId = decodeURIComponent(fileId);
+      let allData: RowData[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
 
-      if (error) throw error;
+      while (hasMore) {
+        const { data: batchData, error } = await supabase
+          .from('재고')
+          .select('*')
+          .eq('file_name', decodedFileId)
+          .range(from, from + batchSize - 1)
+          .order('id', { ascending: true });
 
-      if (inventoryData && inventoryData.length > 0) {
+        if (error) throw error;
+
+        if (batchData && batchData.length > 0) {
+          allData = [...allData, ...batchData];
+          from += batchSize;
+          hasMore = batchData.length === batchSize;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      if (allData.length > 0) {
         // 중복 제거 (id 기준)
-        const uniqueData = inventoryData.filter(
+        const uniqueData = allData.filter(
           (item, index, self) => index === self.findIndex((t) => t.id === item.id)
         );
         
@@ -480,7 +499,7 @@ export default function EditPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [fileId]);
 
   useEffect(() => {
     fetchData();
@@ -890,8 +909,8 @@ export default function EditPage() {
                 </svg>
               </div>
               <div>
-                <h1 className="text-sm font-bold text-white">
-                  셀 편집기
+                <h1 className="text-sm font-bold text-white truncate max-w-[400px]" title={decodeURIComponent(fileId)}>
+                  {decodeURIComponent(fileId)}
                 </h1>
                 <p className="text-xs text-gray-400">
                   셀을 클릭하여 수정 • Enter로 저장 • Esc로 취소
@@ -979,15 +998,15 @@ export default function EditPage() {
                 엑셀 내보내기
               </button>
 
-              {/* 관리 페이지로 */}
+              {/* 파일 상세 페이지로 */}
               <Link
-                href="/management"
+                href={`/management/file/${encodeURIComponent(decodeURIComponent(fileId))}`}
                 className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
-                목록
+                뒤로
               </Link>
             </div>
           </div>

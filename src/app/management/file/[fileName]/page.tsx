@@ -5,6 +5,26 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import AlertModal from '@/components/AlertModal';
+
+interface Alert {
+  id: number;
+  file_name: string;
+  column_name: string;
+  condition_type: 'below' | 'above' | 'equals';
+  threshold_value: number;
+  notification_type: string[];
+  email?: string;
+  is_active: boolean;
+}
+
+interface TriggeredAlert {
+  alert: Alert;
+  triggeredRows: Array<{
+    rowIndex: number;
+    currentValue: number;
+  }>;
+}
 
 type InventoryRow = Record<string, string | number | boolean | null>;
 
@@ -13,17 +33,37 @@ function DBDataTable({
   data, 
   headers,
   onRefresh,
-  isLoading 
+  isLoading,
+  triggeredAlerts = [],
 }: { 
   data: InventoryRow[]; 
   headers: string[];
   onRefresh: () => void;
   isLoading: boolean;
+  triggeredAlerts?: TriggeredAlert[];
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  
+  // 경고 행 인덱스 맵 생성
+  const alertRowMap = useMemo(() => {
+    const map = new Map<number, { column: string; value: number; threshold: number; type: string }[]>();
+    triggeredAlerts.forEach(triggered => {
+      triggered.triggeredRows.forEach(row => {
+        const existing = map.get(row.rowIndex) || [];
+        existing.push({
+          column: triggered.alert.column_name,
+          value: row.currentValue,
+          threshold: triggered.alert.threshold_value,
+          type: triggered.alert.condition_type,
+        });
+        map.set(row.rowIndex, existing);
+      });
+    });
+    return map;
+  }, [triggeredAlerts]);
 
   // 검색 및 정렬된 데이터
   const filteredAndSortedData = useMemo(() => {
@@ -236,20 +276,40 @@ function DBDataTable({
                         {(virtualRow.index + 1).toLocaleString()}
                       </div>
                       {/* Cells */}
-                      {headers.map((header, cellIndex) => (
-                        <div
-                          key={header}
-                          style={{ width: columnWidths[cellIndex] }}
-                          className="flex-shrink-0 px-3 py-2 text-sm text-gray-200 border-l border-[#0f3460]/30"
-                        >
-                          <span 
-                            className="block truncate" 
-                            title={String(row[header] ?? '')}
+                      {headers.map((header, cellIndex) => {
+                        const rowIndex = row.row_index as number | undefined;
+                        const alertInfo = rowIndex !== undefined ? alertRowMap.get(rowIndex) : undefined;
+                        const cellAlert = alertInfo?.find(a => a.column === header);
+                        
+                        return (
+                          <div
+                            key={header}
+                            style={{ width: columnWidths[cellIndex] }}
+                            className={`flex-shrink-0 px-3 py-2 text-sm border-l border-[#0f3460]/30 ${
+                              cellAlert 
+                                ? 'bg-red-500/20 text-red-300' 
+                                : 'text-gray-200'
+                            }`}
                           >
-                            {row[header] !== null && row[header] !== undefined ? String(row[header]) : '-'}
-                          </span>
-                        </div>
-                      ))}
+                            <div className="flex items-center gap-1">
+                              {cellAlert && (
+                                <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                              )}
+                              <span 
+                                className="block truncate" 
+                                title={cellAlert 
+                                  ? `⚠️ 경고: ${cellAlert.value} (기준: ${cellAlert.threshold} ${cellAlert.type === 'below' ? '미만' : cellAlert.type === 'above' ? '초과' : '동일'})`
+                                  : String(row[header] ?? '')
+                                }
+                              >
+                                {row[header] !== null && row[header] !== undefined ? String(row[header]) : '-'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -291,6 +351,11 @@ export default function FileDetailPage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // 알림 관련 상태
+  const [isAlertModalOpen, setIsAlertModalOpen] = useState(false);
+  const [triggeredAlerts, setTriggeredAlerts] = useState<TriggeredAlert[]>([]);
+  const [alertCount, setAlertCount] = useState(0);
 
   // DB에서 해당 파일 데이터 불러오기 (pagination으로 모든 데이터)
   const fetchData = useCallback(async () => {
@@ -326,11 +391,26 @@ export default function FileDetailPage() {
       }
 
       if (allData.length > 0) {
-        // 헤더 추출 (file_name 제외)
-        const allHeaders = Object.keys(allData[0]).filter(key => key !== 'id' && key !== 'file_name');
+        // data 컬럼의 JSON을 풀어서 flat한 데이터로 변환
+        const flattenedData: InventoryRow[] = allData.map((item) => {
+          const { id, data: jsonData, file_name, row_index, created_at, ...rest } = item;
+          // data 컬럼이 JSON 객체인 경우 풀어서 합침
+          if (jsonData && typeof jsonData === 'object' && !Array.isArray(jsonData)) {
+            const jsonObj = jsonData as Record<string, string | number | boolean | null>;
+            return { id, row_index, ...jsonObj, ...rest };
+          }
+          return { id, row_index, ...rest };
+        });
+
+        // 헤더 추출 (첫 번째 행의 data JSON 키들 사용)
+        const firstItem = allData[0];
+        let dataHeaders: string[] = [];
+        if (firstItem.data && typeof firstItem.data === 'object') {
+          dataHeaders = Object.keys(firstItem.data as Record<string, unknown>);
+        }
         
-        setHeaders(['id', ...allHeaders]);
-        setData(allData);
+        setHeaders(['id', ...dataHeaders]);
+        setData(flattenedData);
       } else {
         setData([]);
         setHeaders([]);
@@ -343,9 +423,36 @@ export default function FileDetailPage() {
     }
   }, [fileName]);
 
+  // 알림 조건 체크
+  const checkAlerts = useCallback(async () => {
+    try {
+      const response = await fetch('/api/alerts/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_name: fileName }),
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setTriggeredAlerts(result.triggered || []);
+        setAlertCount(result.totalTriggered || 0);
+      }
+    } catch (err) {
+      console.error('Check alerts error:', err);
+    }
+  }, [fileName]);
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+  
+  // 데이터 로드 후 알림 체크
+  useEffect(() => {
+    if (data.length > 0) {
+      checkAlerts();
+    }
+  }, [data, checkAlerts]);
 
   // 파일 삭제
   const handleDelete = async () => {
@@ -408,6 +515,39 @@ export default function FileDetailPage() {
             </div>
 
             <div className="flex items-center gap-3">
+              {/* 알림 설정 버튼 */}
+              <button
+                onClick={() => setIsAlertModalOpen(true)}
+                className={`relative flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                  alertCount > 0
+                    ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse'
+                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                알림 설정
+                {alertCount > 0 && (
+                  <span className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white font-bold">
+                    {alertCount > 99 ? '99+' : alertCount}
+                  </span>
+                )}
+              </button>
+              
+              {/* 셀 편집 버튼 */}
+              {data.length > 0 && (
+                <Link
+                  href={`/management/${encodeURIComponent(fileName)}/edit`}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium rounded-lg transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  셀 편집
+                </Link>
+              )}
+
               {/* 삭제 버튼 */}
               <button
                 onClick={handleDelete}
@@ -437,6 +577,61 @@ export default function FileDetailPage() {
 
       {/* Main Content */}
       <main className="w-full px-6 py-6">
+        {/* 알림 경고 배너 */}
+        {alertCount > 0 && (
+          <div className="mb-6 p-4 bg-gradient-to-r from-red-500/20 to-orange-500/20 border border-red-500/30 rounded-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-red-500/30 rounded-xl flex items-center justify-center">
+                  <svg className="w-5 h-5 text-red-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-red-300 font-semibold">경고: 조건 충족 데이터 발견!</h3>
+                  <p className="text-red-400/80 text-sm">
+                    {triggeredAlerts.length}개의 알림 조건에서 총 {alertCount}개의 행이 조건을 충족합니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAlertModalOpen(true)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-all"
+              >
+                알림 상세 보기
+              </button>
+            </div>
+            {/* 트리거된 알림 상세 */}
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {triggeredAlerts.map((triggered, idx) => (
+                <div key={idx} className="p-3 bg-red-500/10 rounded-lg border border-red-500/20">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`px-2 py-0.5 text-xs rounded-full ${
+                      triggered.alert.condition_type === 'below'
+                        ? 'bg-red-500/30 text-red-300'
+                        : triggered.alert.condition_type === 'above'
+                        ? 'bg-blue-500/30 text-blue-300'
+                        : 'bg-purple-500/30 text-purple-300'
+                    }`}>
+                      {triggered.alert.condition_type === 'below' ? '미만' : 
+                       triggered.alert.condition_type === 'above' ? '초과' : '동일'}
+                    </span>
+                    <span className="text-amber-400 font-medium text-sm">{triggered.alert.column_name}</span>
+                  </div>
+                  <p className="text-gray-300 text-xs">
+                    기준값 <span className="text-emerald-400">{triggered.alert.threshold_value.toLocaleString()}</span>
+                    {triggered.alert.condition_type === 'below' ? ' 미만' : 
+                     triggered.alert.condition_type === 'above' ? ' 초과' : '과 동일'}
+                  </p>
+                  <p className="text-red-400 text-xs mt-1">
+                    <span className="font-bold">{triggered.triggeredRows.length}</span>개 행 해당
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
         {/* Error Message */}
         {error && (
           <div className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400">
@@ -483,9 +678,21 @@ export default function FileDetailPage() {
             headers={headers} 
             onRefresh={fetchData}
             isLoading={isLoading}
+            triggeredAlerts={triggeredAlerts}
           />
         )}
       </main>
+      
+      {/* 알림 설정 모달 */}
+      <AlertModal
+        isOpen={isAlertModalOpen}
+        onClose={() => setIsAlertModalOpen(false)}
+        fileName={fileName}
+        columns={headers}
+        onAlertCreated={() => {
+          checkAlerts();
+        }}
+      />
     </div>
   );
 }
