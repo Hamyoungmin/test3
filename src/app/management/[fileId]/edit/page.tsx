@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { useDragScroll } from '@/hooks/useDragScroll';
+import AIBriefing from '@/components/AIBriefing';
 
 type CellValue = string | number | boolean | null;
 type RowData = Record<string, CellValue> & { id: number };
@@ -304,6 +305,9 @@ export default function EditPage() {
   
   // 정렬 상태
   const [sortConfig, setSortConfig] = useState<SortConfig>({ column: null, direction: null });
+  
+  // AI 분석 재요청 트리거
+  const [aiRefreshTrigger, setAiRefreshTrigger] = useState(0);
   // 검색 필터
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -600,6 +604,9 @@ export default function EditPage() {
         updated.delete(rowId);
         return updated;
       });
+      
+      // AI 분석 재요청 트리거 (디바운스용 - 여러 셀 수정 시 마지막에만)
+      setAiRefreshTrigger(prev => prev + 1);
 
     } catch (err) {
       console.error('Save cell error:', err);
@@ -704,6 +711,9 @@ export default function EditPage() {
         text: `저장 완료! (수정: ${savedCount}개, 추가: ${insertedCount}개)` 
       });
       setTimeout(() => setMessage(null), 3000);
+      
+      // AI 분석 재요청 트리거
+      setAiRefreshTrigger(prev => prev + 1);
 
     } catch (err) {
       console.error('Batch save error:', err);
@@ -1012,6 +1022,16 @@ export default function EditPage() {
           </div>
         </div>
       </header>
+
+      {/* AI 경영 브리핑 섹션 */}
+      <div className="px-4 py-4 bg-[#1a1a2e]">
+        <AIBriefing 
+          data={data}
+          headers={headers}
+          fileName={decodeURIComponent(fileId)}
+          onRefreshTrigger={aiRefreshTrigger}
+        />
+      </div>
 
       {/* Stats Bar + Search */}
       <div className="bg-[#16213e] border-b border-[#0f3460] px-4 py-2">
