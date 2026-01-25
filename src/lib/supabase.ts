@@ -72,13 +72,15 @@ export type Database = {
           updated_at?: string;
         };
       };
-      // 재고 테이블 - DB 컬럼명: id, file_name, row_index, data
+      // 재고 테이블 - DB 컬럼명: id, file_name, row_index, data, base_stock, alarm_status
       재고: {
         Row: {
           id: number;
           file_name: string;
           row_index: number;
           data: Record<string, unknown>;
+          base_stock: number | null;  // 기준 재고 (최종 확정 시점의 재고)
+          alarm_status: boolean;
           created_at?: string;
         };
         Insert: {
@@ -86,6 +88,8 @@ export type Database = {
           file_name: string;
           row_index: number;
           data: Record<string, unknown>;
+          base_stock?: number | null;
+          alarm_status?: boolean;
           created_at?: string;
         };
         Update: {
@@ -93,6 +97,8 @@ export type Database = {
           file_name?: string;
           row_index?: number;
           data?: Record<string, unknown>;
+          base_stock?: number | null;
+          alarm_status?: boolean;
           created_at?: string;
         };
       };

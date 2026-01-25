@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { createServerSupabaseClient } from '@/lib/supabase';
 
-// OpenAI 클라이언트를 런타임에서 생성 (빌드 시 환경변수 문제 해결)
-function getOpenAIClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY 환경변수가 설정되지 않았습니다.');
+// OpenAI 클라이언트를 런타임에서 생성
+function getOpenAIClient(): OpenAI | null {
+  // 환경변수 또는 하드코딩된 키 사용
+  const apiKey = process.env.OPENAI_API_KEY || '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';
+  
+  if (!apiKey || apiKey.length < 20) {
+    console.error('OpenAI API key is missing or invalid');
+    return null;
   }
+  
   return new OpenAI({ apiKey });
 }
 
@@ -28,6 +33,42 @@ export async function POST(request: Request) {
         error: '분석할 데이터가 없습니다.',
       });
     }
+
+    // DB에서 해당 파일의 알람 상태 조회 (base_stock 기준)
+    const supabase = createServerSupabaseClient();
+    const { data: alarmRows } = await supabase
+      .from('재고')
+      .select('id, data, base_stock, alarm_status')
+      .eq('file_name', fileName)
+      .eq('alarm_status', true);
+
+    // 알람 상태인 품목들 (base_stock 기준으로 재고 부족인 것만)
+    const alarmItems = (alarmRows || []).map(row => {
+      const rowData = row.data as Record<string, unknown>;
+      // 품목명 찾기
+      const nameKeys = ['품목', '품목명', '상품명', '제품명', '이름', 'name', 'item', 'product'];
+      let itemName = `행 ${row.id}`;
+      for (const key of Object.keys(rowData)) {
+        if (nameKeys.some(nk => key.toLowerCase().includes(nk.toLowerCase()))) {
+          itemName = String(rowData[key]);
+          break;
+        }
+      }
+      // 현재 재고 찾기
+      const stockKeys = ['현재재고', '재고', '수량', 'stock', 'quantity'];
+      let currentStock = 0;
+      for (const key of Object.keys(rowData)) {
+        if (stockKeys.some(sk => key.toLowerCase().replace(/\s/g, '').includes(sk.toLowerCase()))) {
+          currentStock = Number(rowData[key]) || 0;
+          break;
+        }
+      }
+      return {
+        name: itemName,
+        value: currentStock,
+        baseStock: row.base_stock,
+      };
+    });
 
     // 숫자 컬럼 식별 및 통계 계산
     const numericColumns: string[] = [];
@@ -64,23 +105,28 @@ export async function POST(request: Request) {
         const min = Math.min(...values);
         const max = Math.max(...values);
 
-        // 재고 부족 품목 (평균의 30% 이하이거나 10 미만)
-        const threshold = Math.max(avg * 0.3, 10);
-        const lowItems = data
-          .filter(row => {
-            const val = Number(row[header]);
-            return !isNaN(val) && val < threshold && val >= 0;
-          })
-          .map(row => ({
-            name: String(row[nameColumn] || row['id'] || 'Unknown'),
-            value: Number(row[header]),
-          }))
-          .sort((a, b) => a.value - b.value)
-          .slice(0, 10);
-
-        columnStats[header] = { min, max, avg, sum, count: values.length, lowItems };
+        // 재고 부족 품목: DB의 alarm_status가 true인 것만 사용 (base_stock 기준)
+        // alarmItems가 없으면 빈 배열
+        columnStats[header] = { 
+          min, 
+          max, 
+          avg, 
+          sum, 
+          count: values.length, 
+          lowItems: alarmItems.length > 0 ? alarmItems : [] 
+        };
       }
     });
+    
+    // 첫 번째 숫자 컬럼에만 알람 품목 할당 (중복 방지)
+    if (numericColumns.length > 0 && alarmItems.length > 0) {
+      const firstNumericCol = numericColumns[0];
+      Object.keys(columnStats).forEach(col => {
+        if (col !== firstNumericCol) {
+          columnStats[col].lowItems = [];
+        }
+      });
+    }
 
     // AI에게 전달할 데이터 요약
     const dataSummary = {
@@ -101,6 +147,22 @@ export async function POST(request: Request) {
 
     // OpenAI API 호출
     const openai = getOpenAIClient();
+    
+    if (!openai) {
+      // API 키가 없으면 기본 응답 반환
+      return NextResponse.json({
+        success: true,
+        analysis: `사장님, ${fileName} 파일의 데이터 ${data.length}개 행을 확인했습니다. AI 분석을 위해서는 OpenAI API 키 설정이 필요합니다.`,
+        insights: {
+          totalRows: data.length,
+          numericColumnsCount: numericColumns.length,
+          lowStockAlerts: [],
+          columnStats,
+        },
+        generatedAt: new Date().toISOString(),
+      });
+    }
+    
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [

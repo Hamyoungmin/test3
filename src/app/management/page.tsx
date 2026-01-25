@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import StockAlert from '@/components/StockAlert';
 import {
   PieChart,
   Pie,
@@ -430,6 +431,19 @@ export default function ManagementPage() {
             </div>
           </div>
         </div>
+
+        {/* 🚨 AI 재고 부족 알림 - 실시간 자동 체크 */}
+        {files.length > 0 && (
+          <div className="mb-8">
+            <StockAlert 
+              autoCheck={true}
+              checkInterval={3}
+              onAlertClick={(item) => {
+                window.location.href = `/management/file/${encodeURIComponent(item.fileName)}`;
+              }}
+            />
+          </div>
+        )}
 
         {/* Charts Section */}
         {files.length > 0 && (

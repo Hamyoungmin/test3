@@ -8,7 +8,11 @@ import { useDragScroll } from '@/hooks/useDragScroll';
 import AIBriefing from '@/components/AIBriefing';
 
 type CellValue = string | number | boolean | null;
-type RowData = Record<string, CellValue> & { id: number };
+type RowData = Record<string, CellValue> & { 
+  id: number; 
+  base_stock?: number | null;  // 기준 재고 (최종 확정된 재고)
+  alarm_status?: boolean; 
+};
 
 interface EditingCell {
   rowId: number;
@@ -168,6 +172,114 @@ function EditableCell({
   );
 }
 
+// 최종 확정 모달 컴포넌트
+function ConfirmBaseStockModal({
+  isOpen,
+  onClose,
+  rowId,
+  currentStock,
+  itemName,
+  onConfirm,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  rowId: number;
+  currentStock: number;
+  itemName: string;
+  onConfirm: (rowId: number, baseStock: number) => Promise<void>;
+}) {
+  const [baseStock, setBaseStock] = useState(currentStock);
+  const [isConfirming, setIsConfirming] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setBaseStock(currentStock);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isOpen, currentStock]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsConfirming(true);
+    await onConfirm(rowId, baseStock);
+    setIsConfirming(false);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-[#16213e] rounded-xl border border-[#0f3460] shadow-2xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-[#0f3460]">
+          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+            <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            기준 재고 확정
+          </h3>
+          <p className="text-xs text-gray-400 mt-1">
+            이 수치를 기준으로 재고가 부족해지면 알람이 발생합니다
+          </p>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="bg-[#0f3460] rounded-lg p-3">
+            <p className="text-sm text-gray-300">
+              품목: <span className="text-white font-medium">{itemName || `행 #${rowId}`}</span>
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              기준 재고 수량
+            </label>
+            <input
+              ref={inputRef}
+              type="number"
+              min="0"
+              value={baseStock}
+              onChange={(e) => setBaseStock(Number(e.target.value))}
+              className="w-full px-4 py-2.5 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-white text-lg font-mono focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              현재 재고가 이 수치 아래로 떨어지면 빨간색 알림이 표시됩니다
+            </p>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 bg-[#0f3460] hover:bg-[#1a1a2e] text-gray-300 rounded-lg font-medium transition-colors"
+            >
+              취소
+            </button>
+            <button
+              type="submit"
+              disabled={isConfirming}
+              className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 text-white rounded-lg font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isConfirming ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  확정 중...
+                </>
+              ) : (
+                '최종 확정'
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // 컬럼 추가 모달 컴포넌트
 function AddColumnModal({
   isOpen,
@@ -310,6 +422,14 @@ export default function EditPage() {
   const [aiRefreshTrigger, setAiRefreshTrigger] = useState(0);
   // 검색 필터
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // 최종 확정 모달 상태
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    rowId: number;
+    currentStock: number;
+    itemName: string;
+  }>({ isOpen: false, rowId: 0, currentStock: 0, itemName: '' });
 
   const tableRef = useRef<HTMLDivElement>(null);
   
@@ -472,7 +592,11 @@ export default function EditPage() {
         
         // 데이터 변환: data 필드 내용을 펼쳐서 평탄화 (엑셀처럼 보이도록)
         const flattenedData: RowData[] = uniqueData.map(item => {
-          const flatRow: RowData = { id: item.id };
+          const flatRow: RowData = { 
+            id: item.id,
+            base_stock: item.base_stock ?? null,  // 기준 재고 (null이면 아직 확정 안됨)
+            alarm_status: item.alarm_status ?? false,
+          };
           
           // data 필드의 내용을 펼침
           if (item.data && typeof item.data === 'object') {
@@ -607,6 +731,9 @@ export default function EditPage() {
       
       // AI 분석 재요청 트리거 (디바운스용 - 여러 셀 수정 시 마지막에만)
       setAiRefreshTrigger(prev => prev + 1);
+      
+      // 모든 셀 수정 시 알람 체크 (컬럼명과 무관하게)
+      await checkAlarmAfterUpdate(rowId, dataObj);
 
     } catch (err) {
       console.error('Save cell error:', err);
@@ -741,6 +868,153 @@ export default function EditPage() {
     } catch (err) {
       console.error('Delete error:', err);
       setMessage({ type: 'error', text: '삭제 중 오류가 발생했습니다.' });
+    }
+  };
+
+  // 기준 재고 확정 저장
+  const handleConfirmBaseStock = async (rowId: number, baseStock: number) => {
+    try {
+      const response = await fetch('/api/inventory/check-alarm', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rowId, baseStock }),
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        setMessage({ type: 'error', text: result.error || '기준 재고 확정 실패' });
+        return;
+      }
+
+      // 로컬 데이터 업데이트
+      setData(prev => prev.map(row => 
+        row.id === rowId 
+          ? { ...row, base_stock: baseStock, alarm_status: result.alarmStatus }
+          : row
+      ));
+
+      setMessage({ 
+        type: 'success', 
+        text: `✅ 기준 재고가 ${baseStock}으로 확정되었습니다.`
+      });
+      setTimeout(() => setMessage(null), 3000);
+
+    } catch (err) {
+      console.error('Save base_stock error:', err);
+      setMessage({ type: 'error', text: '기준 재고 확정 중 오류가 발생했습니다.' });
+    }
+  };
+
+  // 재고 업데이트 후 알람 체크 (기준 재고가 있을 때만)
+  const checkAlarmAfterUpdate = async (rowId: number, updatedData: Record<string, CellValue>) => {
+    try {
+      const row = data.find(r => r.id === rowId);
+      // base_stock이 null이면 (아직 최종 확정 안함) 알람 체크 안함
+      if (!row || row.base_stock === null || row.base_stock === undefined) return;
+
+      const response = await fetch('/api/inventory/check-alarm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rowId, data: updatedData }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        // 로컬 알람 상태 업데이트
+        setData(prev => prev.map(r => 
+          r.id === rowId ? { ...r, alarm_status: result.alarmStatus } : r
+        ));
+
+        // 알람 상태가 변경되면 알림
+        if (result.alarmStatus && !row.alarm_status) {
+          setMessage({ type: 'error', text: result.message || '⚠️ 재고가 부족합니다!' });
+          setTimeout(() => setMessage(null), 4000);
+        }
+      }
+    } catch (err) {
+      console.error('Check alarm error:', err);
+    }
+  };
+
+  // 최종 확정 모달 열기
+  const openConfirmModal = (row: RowData) => {
+    // 품목명 찾기
+    const nameKeys = ['품목', '품목명', '상품명', '제품명', '이름', 'name', 'item', 'product'];
+    let itemName = '';
+    for (const key of nameKeys) {
+      const found = headers.find(h => h.toLowerCase().includes(key.toLowerCase()));
+      if (found && row[found]) {
+        itemName = String(row[found]);
+        break;
+      }
+    }
+
+    // 현재 재고 값 찾기
+    const stockKeys = ['현재재고', '현재_재고', '재고', '재고량', '수량', 'stock', 'quantity'];
+    let currentStock = 0;
+    for (const key of stockKeys) {
+      const found = headers.find(h => h.toLowerCase().replace(/\s/g, '').includes(key.toLowerCase()));
+      if (found && row[found] !== null && row[found] !== undefined) {
+        currentStock = Number(row[found]) || 0;
+        break;
+      }
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      rowId: row.id,
+      currentStock,
+      itemName,
+    });
+  };
+
+  // 전체 최종 확정 - 모든 행의 현재 재고를 기준 재고로 설정
+  const [isBulkConfirming, setIsBulkConfirming] = useState(false);
+  
+  const handleBulkConfirm = async () => {
+    // 확인 다이얼로그
+    const confirmed = window.confirm(
+      `모든 행(${data.length}개)의 현재 재고를 기준 재고로 확정하시겠습니까?\n\n` +
+      `확정 후 재고가 이 수치 아래로 떨어지면 알람이 표시됩니다.`
+    );
+    
+    if (!confirmed) return;
+
+    try {
+      setIsBulkConfirming(true);
+      setMessage({ type: 'success', text: '전체 최종 확정 중...' });
+
+      const response = await fetch('/api/inventory/check-alarm', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          fileName: decodeURIComponent(fileId),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        setMessage({ type: 'error', text: result.error || '전체 확정 실패' });
+        return;
+      }
+
+      // DB에서 데이터 다시 불러오기 (base_stock 값 반영)
+      await fetchData();
+
+      setMessage({ 
+        type: 'success', 
+        text: result.message || `✅ ${result.successCount}개 행이 최종 확정되었습니다.`
+      });
+      setTimeout(() => setMessage(null), 4000);
+
+    } catch (err) {
+      console.error('Bulk confirm error:', err);
+      setMessage({ type: 'error', text: '전체 확정 중 오류가 발생했습니다.' });
+    } finally {
+      setIsBulkConfirming(false);
     }
   };
 
@@ -996,6 +1270,25 @@ export default function EditPage() {
                 컬럼 추가
               </button>
 
+              {/* 전체 최종 확정 버튼 */}
+              <button
+                onClick={handleBulkConfirm}
+                disabled={data.length === 0 || isBulkConfirming}
+                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 text-white text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+              >
+                {isBulkConfirming ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
+                {isBulkConfirming ? '확정 중...' : '전체 최종 확정'}
+              </button>
+
               {/* 엑셀 내보내기 */}
               <button
                 onClick={handleExportExcel}
@@ -1081,6 +1374,14 @@ export default function EditPage() {
                 </span>
               </>
             )}
+            {data.filter(row => row.alarm_status && row.base_stock !== null).length > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-red-400 font-medium animate-pulse">
+                  🚨 재고부족 {data.filter(row => row.alarm_status && row.base_stock !== null).length}개
+                </span>
+              </>
+            )}
           </div>
 
           {/* 오른쪽: 검색창 */}
@@ -1155,7 +1456,7 @@ export default function EditPage() {
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#0f3460]">
                 {/* 액션 컬럼 */}
-                <th className="w-10 px-1 py-2 text-center text-xs font-semibold text-gray-400 border border-[#1a1a2e] bg-[#0f3460] sticky left-0 z-20">
+                <th className="w-14 px-1 py-2 text-center text-xs font-semibold text-gray-400 border border-[#1a1a2e] bg-[#0f3460] sticky left-0 z-20">
                   
                 </th>
                 {headers.map((header) => {
@@ -1229,24 +1530,62 @@ export default function EditPage() {
                   key={row.id}
                   className={`
                     ${rowIndex % 2 === 0 ? 'bg-[#16213e]' : 'bg-[#1a1a2e]'}
-                    ${!isEmptyRow && modifiedRows.has(row.id) ? 'bg-orange-500/15 border-l-2 border-l-orange-500' : ''}
+                    ${!isEmptyRow && row.alarm_status && row.base_stock !== null ? 'bg-red-500/20 border-l-2 border-l-red-500' : ''}
+                    ${!isEmptyRow && modifiedRows.has(row.id) && !row.alarm_status ? 'bg-orange-500/15 border-l-2 border-l-orange-500' : ''}
                     ${isNewRow ? 'bg-emerald-500/15 border-l-2 border-l-emerald-500' : ''}
                     ${isPureEmptyRow ? 'bg-[#12192e] hover:bg-[#1a2540]' : 'hover:bg-[#0f3460]/50'}
                     transition-colors
                   `}
                 >
-                  {/* 삭제 버튼 (빈 행에는 표시 안함) */}
-                  <td className="w-10 px-1 py-0 text-center border border-[#0f3460]/50 bg-inherit sticky left-0">
+                  {/* 액션 버튼 (빈 행에는 표시 안함) */}
+                  <td className="w-20 px-1 py-0 text-center border border-[#0f3460]/50 bg-inherit sticky left-0">
                     {!isEmptyRow && (
-                      <button
-                        onClick={() => handleDeleteRow(row.id)}
-                        className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded transition-colors"
-                        title="삭제"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
+                      <div className="flex items-center justify-center gap-0.5">
+                        {/* 최종 확정 버튼 */}
+                        <button
+                          onClick={() => openConfirmModal(row)}
+                          className={`p-1 rounded transition-colors ${
+                            row.alarm_status 
+                              ? 'text-red-400 bg-red-500/20 animate-pulse hover:bg-red-500/30' 
+                              : row.base_stock !== null && row.base_stock !== undefined
+                                ? 'text-green-400 hover:bg-green-500/20'
+                                : 'text-gray-500 hover:text-green-400 hover:bg-green-500/20'
+                          }`}
+                          title={row.alarm_status 
+                            ? `⚠️ 재고 부족! (기준재고: ${row.base_stock})` 
+                            : row.base_stock !== null && row.base_stock !== undefined
+                              ? `✅ 기준재고: ${row.base_stock}`
+                              : '최종 확정 (클릭하여 기준재고 설정)'
+                          }
+                        >
+                          {row.alarm_status ? (
+                            // 재고 부족 시 경고 아이콘
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                          ) : row.base_stock !== null && row.base_stock !== undefined ? (
+                            // 확정 완료 시 체크 아이콘
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          ) : (
+                            // 미확정 시 - 아이콘
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          )}
+                        </button>
+                        {/* 삭제 버튼 */}
+                        <button
+                          onClick={() => handleDeleteRow(row.id)}
+                          className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded transition-colors"
+                          title="삭제"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
                     )}
                   </td>
 
@@ -1316,15 +1655,20 @@ export default function EditPage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
+              <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+              <span className="text-red-400">재고부족</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+              <span className="text-green-400">기준재고 확정</span>
+            </span>
+            <span className="flex items-center gap-1">
               <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
               <span className="text-orange-400">수정됨</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
               <span className="text-emerald-400">새 행</span>
-            </span>
-            <span className="text-yellow-400">
-              <kbd className="px-1.5 py-0.5 bg-orange-500/30 rounded text-orange-300">일괄 저장</kbd> 클릭 시 DB 반영
             </span>
           </div>
         </div>
@@ -1335,6 +1679,16 @@ export default function EditPage() {
         isOpen={showAddColumnModal}
         onClose={() => setShowAddColumnModal(false)}
         onAdd={handleAddColumn}
+      />
+
+      {/* 최종 확정 모달 */}
+      <ConfirmBaseStockModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        rowId={confirmModal.rowId}
+        currentStock={confirmModal.currentStock}
+        itemName={confirmModal.itemName}
+        onConfirm={handleConfirmBaseStock}
       />
     </div>
   );
