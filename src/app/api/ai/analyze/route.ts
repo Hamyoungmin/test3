@@ -4,8 +4,7 @@ import { createServerSupabaseClient } from '@/lib/supabase';
 
 // OpenAI 클라이언트를 런타임에서 생성
 function getOpenAIClient(): OpenAI | null {
-  // 환경변수 또는 하드코딩된 키 사용
-  const apiKey = process.env.OPENAI_API_KEY || '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';
+  const apiKey = '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';
   
   if (!apiKey || apiKey.length < 20) {
     console.error('OpenAI API key is missing or invalid');
