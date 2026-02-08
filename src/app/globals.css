@@ -1,11 +1,19 @@
 @import "tailwindcss";
 
-/* Custom CSS Variables */
+/* Custom CSS Variables - Light Mode Theme */
 :root {
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --secondary: #ec4899;
-  --accent: #14b8a6;
+  --background: #FFFFFF;
+  --foreground: #111111;
+  --header-bg: #F8F9FA;
+  --border-color: #E5E7EB;
+  --table-odd-row: #F9FAFB;
+  --table-hover: #F3F4F6;
+  --primary: #166534;
+  --primary-hover: #15803d;
+  --danger: #dc2626;
+  --danger-light: #fef2f2;
+  --secondary: #6b7280;
+  --accent: #166534;
 }
 
 /* Custom Animations */
@@ -87,19 +95,10 @@
   background: #94a3b8;
 }
 
-/* Dark mode scrollbar */
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-track {
-    background: #1e293b;
-  }
-  
-  ::-webkit-scrollbar-thumb {
-    background: #475569;
-  }
-  
-  ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
-  }
+/* Base light mode body styles */
+body {
+  background-color: #FFFFFF;
+  color: #111111;
 }
 
 /* Force LTR (Left-to-Right) direction for tables */
@@ -126,24 +125,24 @@ table td {
   text-align: left;
 }
 
-/* Dark theme custom scrollbar for table containers */
+/* Light theme scrollbar for table containers */
 .overflow-x-auto::-webkit-scrollbar {
   height: 10px;
 }
 
 .overflow-x-auto::-webkit-scrollbar-track {
-  background: #0f3460;
+  background: #F3F4F6;
   border-radius: 5px;
 }
 
 .overflow-x-auto::-webkit-scrollbar-thumb {
-  background: #1a1a2e;
+  background: #D1D5DB;
   border-radius: 5px;
-  border: 2px solid #0f3460;
+  border: 2px solid #F3F4F6;
 }
 
 .overflow-x-auto::-webkit-scrollbar-thumb:hover {
-  background: #2a2a4e;
+  background: #9CA3AF;
 }
 
 /* Drag scroll cursor styles */

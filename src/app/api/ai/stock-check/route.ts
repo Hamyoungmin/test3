@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 
 // OpenAI 클라이언트
 function getOpenAIClient() {
-  const apiKey = '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';
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || apiKey.length < 20) return null;
   return new OpenAI({ apiKey });
 }

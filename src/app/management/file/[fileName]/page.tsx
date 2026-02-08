@@ -140,15 +140,15 @@ function DBDataTable({
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0) + 60;
 
   return (
-    <div className="bg-[#16213e] rounded-lg border border-[#0f3460] overflow-hidden">
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[#0f3460] bg-[#1a1a2e]">
+      <div className="px-5 py-4 border-b border-gray-200 bg-white">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-white">
+            <h3 className="text-lg font-semibold text-gray-900">
               파일 데이터
             </h3>
-            <p className="text-xs text-gray-400">
+            <p className="text-sm text-gray-500">
               총 {filteredAndSortedData.length.toLocaleString()}개의 행
             </p>
           </div>
@@ -157,7 +157,7 @@ function DBDataTable({
             {/* Search */}
             <div className="relative">
               <svg
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -174,7 +174,7 @@ function DBDataTable({
                 placeholder="검색..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9 pr-4 py-1.5 w-full sm:w-52 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                className="pl-9 pr-4 py-2 w-full sm:w-56 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition-all"
               />
             </div>
 
@@ -182,7 +182,7 @@ function DBDataTable({
             <button
               onClick={onRefresh}
               disabled={isLoading}
-              className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg font-medium transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg font-medium transition-colors disabled:opacity-50 shadow-sm"
             >
               <svg 
                 className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} 
@@ -202,10 +202,10 @@ function DBDataTable({
       <div className="overflow-x-auto" dir="ltr">
         <div style={{ minWidth: totalWidth }} className="text-left">
           {/* Table Header */}
-          <div className="sticky top-0 z-10 bg-[#0f3460] border-b border-[#1a1a2e]">
+          <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
             <div className="flex">
               {/* Row Number Header */}
-              <div className="flex-shrink-0 w-14 px-3 py-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              <div className="flex-shrink-0 w-14 px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                 #
               </div>
               {/* Column Headers */}
@@ -214,13 +214,13 @@ function DBDataTable({
                   key={header}
                   onClick={() => handleSort(header)}
                   style={{ width: columnWidths[index] }}
-                  className="flex-shrink-0 px-3 py-2 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-[#1a1a2e] transition-colors select-none border-l border-[#1a1a2e]"
+                  className="flex-shrink-0 px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none border-l border-gray-200"
                 >
                   <div className="flex items-center gap-1">
                     <span className="truncate">{header}</span>
                     {sortColumn === header && (
                       <svg
-                        className={`w-3 h-3 flex-shrink-0 transition-transform text-emerald-400 ${
+                        className={`w-3 h-3 flex-shrink-0 transition-transform text-green-600 ${
                           sortDirection === 'desc' ? 'rotate-180' : ''
                         }`}
                         fill="none"
@@ -239,11 +239,11 @@ function DBDataTable({
           {/* Virtualized Rows */}
           <div
             ref={parentRef}
-            className="overflow-y-auto"
+            className="overflow-y-auto bg-white"
             style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}
           >
             {filteredAndSortedData.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-gray-500">
+              <div className="flex items-center justify-center h-full text-gray-400">
                 {data.length === 0 ? '저장된 데이터가 없습니다.' : '검색 결과가 없습니다.'}
               </div>
             ) : (
@@ -267,12 +267,12 @@ function DBDataTable({
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      className={`flex items-center border-b border-[#0f3460]/50 hover:bg-[#0f3460]/50 transition-colors ${
-                        virtualRow.index % 2 === 0 ? 'bg-[#16213e]' : 'bg-[#1a1a2e]'
+                      className={`flex items-center border-b border-gray-100 hover:bg-green-50 transition-colors ${
+                        virtualRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                       }`}
                     >
                       {/* Row Number */}
-                      <div className="flex-shrink-0 w-14 px-3 py-2 text-xs text-gray-500 font-mono">
+                      <div className="flex-shrink-0 w-14 px-3 py-2 text-xs text-gray-400 font-mono">
                         {(virtualRow.index + 1).toLocaleString()}
                       </div>
                       {/* Cells */}
@@ -285,15 +285,15 @@ function DBDataTable({
                           <div
                             key={header}
                             style={{ width: columnWidths[cellIndex] }}
-                            className={`flex-shrink-0 px-3 py-2 text-sm border-l border-[#0f3460]/30 ${
+                            className={`flex-shrink-0 px-3 py-2 text-sm border-l border-gray-100 ${
                               cellAlert 
-                                ? 'bg-red-500/20 text-red-300' 
-                                : 'text-gray-200'
+                                ? 'bg-red-50 text-red-600' 
+                                : 'text-gray-700'
                             }`}
                           >
                             <div className="flex items-center gap-1">
                               {cellAlert && (
-                                <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                 </svg>
                               )}
@@ -320,7 +320,7 @@ function DBDataTable({
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-[#0f3460] bg-[#1a1a2e]">
+      <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
         <div className="flex items-center justify-between text-xs text-gray-500">
           <span>
             {rowVirtualizer.getVirtualItems().length > 0 && (
@@ -330,7 +330,7 @@ function DBDataTable({
               </>
             )}
           </span>
-          <span className="flex items-center gap-1 text-emerald-400">
+          <span className="flex items-center gap-1 text-green-600">
             <svg className="w-3 h-3 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
@@ -481,33 +481,33 @@ export default function FileDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#1a1a2e] text-gray-100">
+    <div className="min-h-screen bg-white">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-[#16213e] border-b border-[#0f3460] shadow-lg">
+      <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
         <div className="w-full px-6">
-          <div className="flex items-center justify-between h-14">
+          <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-4">
               {/* Back Button */}
               <Link
                 href="/management"
-                className="w-9 h-9 bg-[#0f3460] hover:bg-[#1a1a2e] rounded-lg flex items-center justify-center transition-colors"
+                className="w-9 h-9 bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center justify-center transition-colors"
               >
-                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </Link>
               
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-sm">
                   <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                 </div>
                 <div>
-                  <h1 className="text-lg font-bold text-white truncate max-w-[300px]" title={fileName}>
+                  <h1 className="text-lg font-bold text-gray-900 truncate max-w-[300px]" title={fileName}>
                     {fileName}
                   </h1>
-                  <p className="text-xs text-gray-400">
+                  <p className="text-sm text-gray-500">
                     {isLoading ? '로딩 중...' : `${data.length.toLocaleString()}개 행`}
                   </p>
                 </div>
@@ -518,10 +518,10 @@ export default function FileDetailPage() {
               {/* 알림 설정 버튼 */}
               <button
                 onClick={() => setIsAlertModalOpen(true)}
-                className={`relative flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                className={`relative flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg transition-all ${
                   alertCount > 0
-                    ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse'
-                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-amber-500 hover:bg-amber-600 text-white'
                 }`}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -529,7 +529,7 @@ export default function FileDetailPage() {
                 </svg>
                 알림 설정
                 {alertCount > 0 && (
-                  <span className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white font-bold">
+                  <span className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white font-bold shadow-sm">
                     {alertCount > 99 ? '99+' : alertCount}
                   </span>
                 )}
@@ -539,7 +539,7 @@ export default function FileDetailPage() {
               {data.length > 0 && (
                 <Link
                   href={`/management/${encodeURIComponent(fileName)}/edit`}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium rounded-lg transition-all"
+                  className="flex items-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg transition-all shadow-sm"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -552,7 +552,7 @@ export default function FileDetailPage() {
               <button
                 onClick={handleDelete}
                 disabled={isLoading}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white text-sm font-medium rounded-lg transition-all border border-red-600/30 hover:border-transparent"
+                className="flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 text-sm font-medium rounded-lg transition-all border border-red-200"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -563,7 +563,7 @@ export default function FileDetailPage() {
               {/* 목록으로 */}
               <Link
                 href="/management"
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-all"
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
@@ -576,27 +576,27 @@ export default function FileDetailPage() {
       </header>
 
       {/* Main Content */}
-      <main className="w-full px-6 py-6">
+      <main className="w-full px-6 py-6 bg-gray-50 min-h-[calc(100vh-64px)]">
         {/* 알림 경고 배너 */}
         {alertCount > 0 && (
-          <div className="mb-6 p-4 bg-gradient-to-r from-red-500/20 to-orange-500/20 border border-red-500/30 rounded-xl">
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl shadow-sm">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-red-500/30 rounded-xl flex items-center justify-center">
-                  <svg className="w-5 h-5 text-red-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
+                  <svg className="w-5 h-5 text-red-500 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-red-300 font-semibold">경고: 조건 충족 데이터 발견!</h3>
-                  <p className="text-red-400/80 text-sm">
+                  <h3 className="text-red-700 font-semibold">경고: 조건 충족 데이터 발견!</h3>
+                  <p className="text-red-600 text-sm">
                     {triggeredAlerts.length}개의 알림 조건에서 총 {alertCount}개의 행이 조건을 충족합니다.
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setIsAlertModalOpen(true)}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-all"
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm"
               >
                 알림 상세 보기
               </button>
@@ -604,26 +604,26 @@ export default function FileDetailPage() {
             {/* 트리거된 알림 상세 */}
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {triggeredAlerts.map((triggered, idx) => (
-                <div key={idx} className="p-3 bg-red-500/10 rounded-lg border border-red-500/20">
+                <div key={idx} className="p-3 bg-white rounded-lg border border-red-200 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`px-2 py-0.5 text-xs rounded-full ${
+                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
                       triggered.alert.condition_type === 'below'
-                        ? 'bg-red-500/30 text-red-300'
+                        ? 'bg-red-100 text-red-700'
                         : triggered.alert.condition_type === 'above'
-                        ? 'bg-blue-500/30 text-blue-300'
-                        : 'bg-purple-500/30 text-purple-300'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-purple-100 text-purple-700'
                     }`}>
                       {triggered.alert.condition_type === 'below' ? '미만' : 
                        triggered.alert.condition_type === 'above' ? '초과' : '동일'}
                     </span>
-                    <span className="text-amber-400 font-medium text-sm">{triggered.alert.column_name}</span>
+                    <span className="text-amber-600 font-medium text-sm">{triggered.alert.column_name}</span>
                   </div>
-                  <p className="text-gray-300 text-xs">
-                    기준값 <span className="text-emerald-400">{triggered.alert.threshold_value.toLocaleString()}</span>
+                  <p className="text-gray-600 text-xs">
+                    기준값 <span className="text-green-600 font-medium">{triggered.alert.threshold_value.toLocaleString()}</span>
                     {triggered.alert.condition_type === 'below' ? ' 미만' : 
                      triggered.alert.condition_type === 'above' ? ' 초과' : '과 동일'}
                   </p>
-                  <p className="text-red-400 text-xs mt-1">
+                  <p className="text-red-600 text-xs mt-1">
                     <span className="font-bold">{triggered.triggeredRows.length}</span>개 행 해당
                   </p>
                 </div>
@@ -634,7 +634,7 @@ export default function FileDetailPage() {
         
         {/* Error Message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400">
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -648,25 +648,25 @@ export default function FileDetailPage() {
         {isLoading ? (
           <div className="flex items-center justify-center h-[500px]">
             <div className="flex flex-col items-center gap-4">
-              <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-400">데이터를 불러오는 중...</p>
+              <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-gray-500">데이터를 불러오는 중...</p>
             </div>
           </div>
         ) : data.length === 0 && !error ? (
-          <div className="bg-[#16213e] rounded-lg border border-[#0f3460] p-8">
+          <div className="bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
             <div className="flex flex-col items-center justify-center h-[400px]">
-              <div className="w-20 h-20 bg-[#0f3460] rounded-full flex items-center justify-center mb-4">
-                <svg className="w-10 h-10 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-300 mb-2">데이터가 없습니다</h3>
+              <h3 className="text-lg font-semibold text-gray-700 mb-2">데이터가 없습니다</h3>
               <p className="text-gray-500 text-center text-sm max-w-md mb-6">
                 이 파일에는 저장된 데이터가 없습니다.
               </p>
               <Link
                 href="/management"
-                className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-all"
+                className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-all shadow-sm"
               >
                 파일 목록으로 돌아가기
               </Link>

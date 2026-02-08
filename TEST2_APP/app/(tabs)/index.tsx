@@ -4,14 +4,25 @@ import {
   View,
   Text,
   FlatList,
+  ScrollView,
   RefreshControl,
   ActivityIndicator,
   TouchableOpacity,
   Animated,
   Easing,
+  Modal,
+  TextInput,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Dimensions } from 'react-native';
+import { LineChart } from 'react-native-chart-kit';
 import { supabase } from '../../lib/supabase';
+import { sendLocalNotification } from '../../lib/notifications';
+import { getAIBusinessAdvice } from '../../lib/openai';
 
 // 재고 아이템 타입
 interface InventoryItem {
@@ -21,12 +32,36 @@ interface InventoryItem {
   data: Record<string, unknown>;
   base_stock: number | null;
   alarm_status: boolean;
+  expiry_date: string | null;
   // 파싱된 데이터
   itemName: string;
   currentStock: number;
   isLowStock: boolean;
   shortage: number;
+  // 유통기한 관련
+  daysUntilExpiry: number | null;
+  isExpiringSoon: boolean; // 7일 이내
+  isExpired: boolean; // 이미 지남
 }
+
+// 📁 파일 그룹 타입
+interface FileGroup {
+  fileName: string;
+  items: InventoryItem[];
+  totalItems: number;
+  lowStockCount: number;
+  expiringCount: number;
+  hasConfirmed: boolean; // 기준 재고 설정된 항목이 있는지
+}
+
+// 🎨 파일별 포인트 색상 (웹과 동일)
+const GRADIENT_COLORS = [
+  ['#8b5cf6', '#a78bfa'], // 보라
+  ['#06b6d4', '#22d3ee'], // 하늘
+  ['#10b981', '#34d399'], // 초록
+  ['#f59e0b', '#fbbf24'], // 노랑
+  ['#ef4444', '#f87171'], // 빨강
+];
 
 // 컬럼명 매칭 함수
 function findColumnValue(data: Record<string, unknown>, keywords: string[]): unknown {
@@ -80,9 +115,40 @@ function findItemName(data: Record<string, unknown>, rowIndex: number): string {
 
 export default function HomeScreen() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [fileGroups, setFileGroups] = useState<FileGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // 📁 파일 상세 모달 관련 state
+  const [fileDetailModalVisible, setFileDetailModalVisible] = useState(false);
+  const [selectedFileGroup, setSelectedFileGroup] = useState<FileGroup | null>(null);
+  
+  // 수정 모달 관련 state
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [editCurrentStock, setEditCurrentStock] = useState('');
+  const [editBaseStock, setEditBaseStock] = useState('');
+  const [editExpiryDate, setEditExpiryDate] = useState('');
+  const [saving, setSaving] = useState(false);
+  
+  // 검색 관련 state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [detailSearchQuery, setDetailSearchQuery] = useState(''); // 상세 화면 검색
+  
+  // AI 경영 한마디 관련 state
+  const [aiAdvice, setAiAdvice] = useState<string>('');
+  const [aiAdviceLoading, setAiAdviceLoading] = useState(false);
+  
+  // 차트 관련 state
+  const [chartData, setChartData] = useState<{
+    labels: string[];
+    datasets: { data: number[]; color: () => string; strokeWidth: number }[];
+    legend: string[];
+  } | null>(null);
+  const [fastestDepletingItem, setFastestDepletingItem] = useState<string>('');
+  
+  const screenWidth = Dimensions.get('window').width;
   
   // 새로고침 버튼 회전 애니메이션
   const spinValue = useRef(new Animated.Value(0)).current;
@@ -109,25 +175,42 @@ export default function HomeScreen() {
     outputRange: ['0deg', '360deg'],
   });
 
-  // 재고 데이터 불러오기
+  // 재고 데이터 불러오기 (모든 데이터 - 페이지네이션 적용)
   const fetchInventory = useCallback(async () => {
     try {
       setError(null);
       
-      // base_stock이 설정된 (최종 확정된) 재고만 조회
-      const { data, error: dbError } = await supabase
-        .from('재고')
-        .select('*')
-        .not('base_stock', 'is', null)
-        .order('file_name')
-        .order('row_index');
+      // 🔥 모든 재고 데이터 조회 (페이지네이션으로 전체 데이터 가져오기)
+      let allData: any[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
 
-      if (dbError) {
-        throw new Error(dbError.message);
+      while (hasMore) {
+        const { data: batchData, error: fetchError } = await supabase
+          .from('재고')
+          .select('*')
+          .range(from, from + batchSize - 1)
+          .order('id', { ascending: true });
+
+        if (fetchError) {
+          throw new Error(fetchError.message);
+        }
+
+        if (batchData && batchData.length > 0) {
+          allData = [...allData, ...batchData];
+          from += batchSize;
+          hasMore = batchData.length === batchSize;
+        } else {
+          hasMore = false;
+        }
       }
+
+      const data = allData;
 
       if (!data || data.length === 0) {
         setInventory([]);
+        setFileGroups([]);
         return;
       }
 
@@ -145,8 +228,24 @@ export default function HomeScreen() {
         );
         
         const baseStock = row.base_stock || 0;
-        const isLowStock = currentStock < baseStock;
+        // base_stock이 설정된 경우에만 재고 부족 체크
+        const isLowStock = baseStock > 0 && currentStock < baseStock;
         const shortage = isLowStock ? baseStock - currentStock : 0;
+
+        // 유통기한 계산
+        let daysUntilExpiry: number | null = null;
+        let isExpiringSoon = false;
+        let isExpired = false;
+        
+        if (row.expiry_date) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const expiryDate = new Date(row.expiry_date);
+          expiryDate.setHours(0, 0, 0, 0);
+          daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          isExpiringSoon = daysUntilExpiry > 0 && daysUntilExpiry <= 7;
+          isExpired = daysUntilExpiry <= 0;
+        }
 
         return {
           ...row,
@@ -154,17 +253,58 @@ export default function HomeScreen() {
           currentStock,
           isLowStock,
           shortage,
+          daysUntilExpiry,
+          isExpiringSoon,
+          isExpired,
         };
       });
 
-      // 재고 부족 품목을 상단에 표시
+      // 정렬: 유통기한 임박 > 재고 부족 > 나머지
       parsedData.sort((a, b) => {
+        // 유통기한 만료 우선
+        if (a.isExpired && !b.isExpired) return -1;
+        if (!a.isExpired && b.isExpired) return 1;
+        // 유통기한 임박 우선
+        if (a.isExpiringSoon && !b.isExpiringSoon) return -1;
+        if (!a.isExpiringSoon && b.isExpiringSoon) return 1;
+        // 재고 부족 우선
         if (a.isLowStock && !b.isLowStock) return -1;
         if (!a.isLowStock && b.isLowStock) return 1;
         return 0;
       });
 
       setInventory(parsedData);
+
+      // 📁 파일별 그룹화
+      const groupedByFile = parsedData.reduce((acc, item) => {
+        const fileName = item.file_name;
+        if (!acc[fileName]) {
+          acc[fileName] = [];
+        }
+        acc[fileName].push(item);
+        return acc;
+      }, {} as Record<string, InventoryItem[]>);
+
+      // FileGroup 배열 생성
+      const groups: FileGroup[] = Object.entries(groupedByFile).map(([fileName, items]) => ({
+        fileName,
+        items,
+        totalItems: items.length,
+        lowStockCount: items.filter(item => item.isLowStock).length,
+        expiringCount: items.filter(item => item.isExpiringSoon || item.isExpired).length,
+        hasConfirmed: items.some(item => item.base_stock !== null && item.base_stock > 0),
+      }));
+
+      // 문제 있는 파일 우선 정렬
+      groups.sort((a, b) => {
+        const aHasIssue = a.lowStockCount > 0 || a.expiringCount > 0;
+        const bHasIssue = b.lowStockCount > 0 || b.expiringCount > 0;
+        if (aHasIssue && !bHasIssue) return -1;
+        if (!aHasIssue && bHasIssue) return 1;
+        return a.fileName.localeCompare(b.fileName);
+      });
+
+      setFileGroups(groups);
     } catch (err) {
       setError(err instanceof Error ? err.message : '데이터를 불러올 수 없습니다.');
     } finally {
@@ -184,19 +324,269 @@ export default function HomeScreen() {
     stopSpinAnimation();
   }, [fetchInventory]);
 
-  // 재고 아이템 렌더링
+  // 수정 모달 열기
+  const openEditModal = (item: InventoryItem) => {
+    setSelectedItem(item);
+    setEditCurrentStock(String(item.currentStock));
+    setEditBaseStock(String(item.base_stock || 0));
+    setEditExpiryDate(item.expiry_date || '');
+    setEditModalVisible(true);
+  };
+
+  // 수정 모달 닫기
+  const closeEditModal = () => {
+    setEditModalVisible(false);
+    setSelectedItem(null);
+    setEditCurrentStock('');
+    setEditBaseStock('');
+    setEditExpiryDate('');
+  };
+
+  // 현재 재고 컬럼 키 찾기
+  const findStockColumnKey = (data: Record<string, unknown>): string | null => {
+    const keywords = ['현재재고', '현재 재고', '재고', '수량', 'stock', 'quantity', 'qty'];
+    for (const key of Object.keys(data)) {
+      const normalizedKey = key.toLowerCase().replace(/\s/g, '');
+      for (const keyword of keywords) {
+        if (normalizedKey.includes(keyword.toLowerCase())) {
+          return key;
+        }
+      }
+    }
+    return null;
+  };
+
+  // Supabase에 재고 업데이트
+  const saveInventoryChanges = async () => {
+    if (!selectedItem) return;
+
+    const newCurrentStock = parseInt(editCurrentStock, 10);
+    const newBaseStock = parseInt(editBaseStock, 10);
+
+    if (isNaN(newCurrentStock) || isNaN(newBaseStock)) {
+      Alert.alert('오류', '유효한 숫자를 입력해주세요.');
+      return;
+    }
+
+    if (newCurrentStock < 0 || newBaseStock < 0) {
+      Alert.alert('오류', '재고는 0 이상이어야 합니다.');
+      return;
+    }
+
+    // 유통기한 유효성 검사
+    let parsedExpiryDate: string | null = null;
+    if (editExpiryDate.trim()) {
+      // YYYY-MM-DD 형식 검사
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(editExpiryDate.trim())) {
+        Alert.alert('오류', '유통기한은 YYYY-MM-DD 형식으로 입력해주세요.\n예: 2026-12-31');
+        return;
+      }
+      parsedExpiryDate = editExpiryDate.trim();
+    }
+
+    setSaving(true);
+
+    try {
+      // data 객체에서 현재 재고 컬럼 찾아서 업데이트
+      const stockKey = findStockColumnKey(selectedItem.data as Record<string, unknown>);
+      const updatedData = { ...selectedItem.data };
+      
+      if (stockKey) {
+        updatedData[stockKey] = newCurrentStock;
+      }
+
+      const { error: updateError } = await supabase
+        .from('재고')
+        .update({
+          data: updatedData,
+          base_stock: newBaseStock,
+          expiry_date: parsedExpiryDate,
+        })
+        .eq('id', selectedItem.id);
+
+      if (updateError) {
+        throw new Error(updateError.message);
+      }
+
+      Alert.alert('성공', '재고가 업데이트되었습니다.');
+      closeEditModal();
+      await fetchInventory(); // 데이터 새로고침
+    } catch (err) {
+      Alert.alert('오류', err instanceof Error ? err.message : '업데이트에 실패했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 📁 파일 카드 렌더링 (메인 화면 - 웹과 동일 디자인)
+  const renderFileCard = ({ item, index }: { item: FileGroup; index: number }) => {
+    const colorIndex = index % GRADIENT_COLORS.length;
+    const primaryColor = GRADIENT_COLORS[colorIndex][0];
+    const secondaryColor = GRADIENT_COLORS[colorIndex][1];
+    const percentage = totalItems > 0 ? (item.totalItems / totalItems) * 100 : 0;
+    
+    // 파일 삭제 핸들러
+    const handleDeleteFile = async () => {
+      Alert.alert(
+        '파일 삭제',
+        `"${item.fileName}" 파일의 모든 데이터를 삭제하시겠습니까?`,
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '삭제',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const { error } = await supabase
+                  .from('재고')
+                  .delete()
+                  .eq('file_name', item.fileName);
+                if (error) throw error;
+                Alert.alert('완료', '파일이 삭제되었습니다.');
+                fetchInventory();
+              } catch (err) {
+                Alert.alert('오류', '삭제 중 오류가 발생했습니다.');
+              }
+            }
+          }
+        ]
+      );
+    };
+    
+    return (
+      <View style={styles.fileCardWrapper}>
+        <TouchableOpacity 
+          style={styles.fileCard}
+          onPress={() => {
+            setSelectedFileGroup(item);
+            setDetailSearchQuery('');
+            setFileDetailModalVisible(true);
+          }}
+          activeOpacity={0.9}
+        >
+          {/* 상단 그라데이션 라인 */}
+          <View style={[styles.fileCardGradientLine, { backgroundColor: primaryColor }]} />
+          
+          {/* 카드 내용 */}
+          <View style={styles.fileCardContent}>
+            {/* 파일 아이콘 + 정보 */}
+            <View style={styles.fileCardHeader}>
+              <View style={[styles.fileIconContainer, { backgroundColor: `${primaryColor}20` }]}>
+                <Ionicons name="document-text" size={24} color={primaryColor} />
+              </View>
+              <View style={styles.fileCardInfo}>
+                <Text style={styles.fileCardName} numberOfLines={1}>
+                  {item.fileName}
+                </Text>
+                <View style={styles.fileCardRowCount}>
+                  <Text style={[styles.fileCardRowNumber, { color: primaryColor }]}>
+                    {item.totalItems.toLocaleString()}
+                  </Text>
+                  <Text style={styles.fileCardRowLabel}>행</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* 데이터 비중 프로그레스 바 */}
+            <View style={styles.fileCardProgress}>
+              <View style={styles.fileCardProgressHeader}>
+                <Text style={styles.fileCardProgressLabel}>데이터 비중</Text>
+                <Text style={styles.fileCardProgressPercent}>{percentage.toFixed(1)}%</Text>
+              </View>
+              <View style={styles.fileCardProgressBar}>
+                <View 
+                  style={[
+                    styles.fileCardProgressFill, 
+                    { width: `${Math.min(percentage, 100)}%`, backgroundColor: primaryColor }
+                  ]} 
+                />
+              </View>
+            </View>
+          </View>
+
+          {/* 하단 액션 푸터 */}
+          <View style={styles.fileCardFooter}>
+            <TouchableOpacity 
+              style={styles.fileCardViewButton}
+              onPress={() => {
+                setSelectedFileGroup(item);
+                setDetailSearchQuery('');
+                setFileDetailModalVisible(true);
+              }}
+            >
+              <Text style={[styles.fileCardViewText, { color: primaryColor }]}>데이터 보기</Text>
+              <Ionicons name="chevron-forward" size={16} color={primaryColor} />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.fileCardDeleteButton}
+              onPress={handleDeleteFile}
+            >
+              <Ionicons name="trash-outline" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+          </View>
+
+          {/* 재고 부족/유통기한 임박 배지 */}
+          {(item.lowStockCount > 0 || item.expiringCount > 0) && (
+            <View style={styles.fileCardBadges}>
+              {item.lowStockCount > 0 && (
+                <View style={styles.fileCardAlertBadge}>
+                  <Ionicons name="warning" size={12} color="#fff" />
+                  <Text style={styles.fileCardAlertBadgeText}>{item.lowStockCount}</Text>
+                </View>
+              )}
+              {item.expiringCount > 0 && (
+                <View style={styles.fileCardExpiringBadge}>
+                  <Ionicons name="time" size={12} color="#fff" />
+                  <Text style={styles.fileCardExpiringBadgeText}>{item.expiringCount}</Text>
+                </View>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // 재고 아이템 렌더링 (상세 화면)
   const renderItem = ({ item }: { item: InventoryItem }) => (
-    <View style={[styles.itemCard, item.isLowStock && styles.lowStockCard]}>
+    <View style={[
+      styles.itemCard, 
+      item.isLowStock && styles.lowStockCard,
+      item.isExpired && styles.expiredCard,
+      item.isExpiringSoon && !item.isExpired && styles.expiringSoonCard,
+    ]}>
       <View style={styles.itemHeader}>
         <Text style={styles.itemName} numberOfLines={1}>
           {item.itemName}
         </Text>
-        {item.isLowStock && (
-          <View style={styles.alertBadge}>
-            <Ionicons name="warning" size={16} color="#fff" />
-            <Text style={styles.alertBadgeText}>재고 부족</Text>
-          </View>
-        )}
+        <View style={styles.headerRight}>
+          {item.isExpired && (
+            <View style={styles.expiredBadge}>
+              <Ionicons name="skull" size={14} color="#fff" />
+              <Text style={styles.expiredBadgeText}>폐기</Text>
+            </View>
+          )}
+          {item.isExpiringSoon && !item.isExpired && (
+            <View style={styles.expiringSoonBadge}>
+              <Ionicons name="time" size={14} color="#92400e" />
+              <Text style={styles.expiringSoonBadgeText}>폐기 임박</Text>
+            </View>
+          )}
+          {item.isLowStock && (
+            <View style={styles.alertBadge}>
+              <Ionicons name="warning" size={16} color="#fff" />
+              <Text style={styles.alertBadgeText}>재고 부족</Text>
+            </View>
+          )}
+          <TouchableOpacity 
+            style={styles.editButton}
+            onPress={() => openEditModal(item)}
+          >
+            <Ionicons name="pencil" size={16} color="#166534" />
+            <Text style={styles.editButtonText}>수정</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       
       <View style={styles.stockInfo}>
@@ -219,7 +609,26 @@ export default function HomeScreen() {
           </Text>
         </View>
         
-        {item.isLowStock && (
+        {item.expiry_date && (
+          <>
+            <View style={styles.stockDivider} />
+            <View style={styles.stockColumn}>
+              <Text style={styles.stockLabel}>유통기한</Text>
+              <Text style={[
+                styles.stockValue,
+                styles.expiryValue,
+                item.isExpired && styles.expiredValue,
+                item.isExpiringSoon && !item.isExpired && styles.expiringSoonValue,
+              ]}>
+                {item.daysUntilExpiry !== null && item.daysUntilExpiry <= 0 
+                  ? '만료' 
+                  : `D-${item.daysUntilExpiry}`}
+              </Text>
+            </View>
+          </>
+        )}
+        
+        {item.isLowStock && !item.expiry_date && (
           <>
             <View style={styles.stockDivider} />
             <View style={styles.stockColumn}>
@@ -231,6 +640,25 @@ export default function HomeScreen() {
           </>
         )}
       </View>
+
+      {/* 유통기한 임박/만료 경고 */}
+      {item.isExpired && (
+        <View style={styles.expiredMessage}>
+          <Ionicons name="skull" size={18} color="#7f1d1d" />
+          <Text style={styles.expiredText}>
+            유통기한이 만료되었습니다! 즉시 폐기해주세요.
+          </Text>
+        </View>
+      )}
+      
+      {item.isExpiringSoon && !item.isExpired && (
+        <View style={styles.expiringSoonMessage}>
+          <Ionicons name="time" size={18} color="#92400e" />
+          <Text style={styles.expiringSoonText}>
+            유통기한이 {item.daysUntilExpiry}일 남았습니다. 우선 판매해주세요!
+          </Text>
+        </View>
+      )}
       
       {item.isLowStock && (
         <View style={styles.alertMessage}>
@@ -245,9 +673,63 @@ export default function HomeScreen() {
     </View>
   );
 
-  // 통계 정보
+  // 🔍 파일 그룹 검색 필터링
+  const filteredFileGroups = fileGroups.filter(group => {
+    const matchesSearch = searchQuery === '' || 
+      group.fileName.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSearch;
+  });
+
+  // 📁 상세 화면 품목 필터링
+  const filteredDetailItems = selectedFileGroup?.items.filter(item => {
+    const matchesSearch = detailSearchQuery === '' || 
+      item.itemName.toLowerCase().includes(detailSearchQuery.toLowerCase());
+    return matchesSearch;
+  }) || [];
+
+  // 통계 정보 (전체 기준)
   const totalItems = inventory.length;
+  const totalFiles = fileGroups.length;
   const lowStockItems = inventory.filter(item => item.isLowStock).length;
+  const lowStockList = inventory.filter(item => item.isLowStock);
+  const expiringItems = inventory.filter(item => item.isExpiringSoon || item.isExpired).length;
+
+  // 발주 목록 공유
+  const shareOrderList = async () => {
+    if (lowStockList.length === 0) {
+      Alert.alert('알림', '현재 재고 부족 품목이 없습니다.');
+      return;
+    }
+
+    // 날짜 포맷
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`;
+
+    // 발주 목록 텍스트 생성
+    const orderItems = lowStockList.map((item, index) => 
+      `${index + 1}. ${item.itemName}: ${item.shortage}개`
+    ).join('\n');
+
+    const totalShortage = lowStockList.reduce((sum, item) => sum + item.shortage, 0);
+
+    const message = `📦 발주 목록 (${dateStr})
+
+${orderItems}
+
+──────────────
+총 ${lowStockList.length}개 품목, ${totalShortage}개 발주 필요
+
+※ 재고관리 앱에서 자동 생성`;
+
+    try {
+      await Share.share({
+        message,
+        title: '발주 목록 공유',
+      });
+    } catch (error) {
+      Alert.alert('오류', '공유에 실패했습니다.');
+    }
+  };
 
   // AI 재고 요약 생성
   const generateAISummary = useCallback(() => {
@@ -276,33 +758,174 @@ export default function HomeScreen() {
     return `⚠️ ${lowStockList.length}개 품목에서 재고 부족이 감지되었습니다. 가장 부족한 품목은 "${mostShortage.itemName}"(${mostShortage.shortage}개 부족)이며, 총 ${totalShortage}개의 발주가 필요합니다.`;
   }, [inventory, totalItems]);
 
+  // AI 경영 한마디 가져오기
+  const fetchAIAdvice = useCallback(async () => {
+    if (inventory.length === 0) {
+      setAiAdvice('재고 데이터를 등록하면 AI가 경영 조언을 드려요! 🤖');
+      return;
+    }
+
+    setAiAdviceLoading(true);
+    try {
+      const inventoryData = inventory.map(item => ({
+        itemName: item.itemName,
+        currentStock: item.currentStock,
+        baseStock: item.base_stock || 0,
+        shortage: item.shortage,
+        isLowStock: item.isLowStock,
+      }));
+
+      const advice = await getAIBusinessAdvice(inventoryData);
+      setAiAdvice(advice);
+    } catch (error) {
+      setAiAdvice('AI 조언을 불러오는 중 오류가 발생했습니다.');
+    } finally {
+      setAiAdviceLoading(false);
+    }
+  }, [inventory]);
+
+  // 재고 데이터 변경 시 AI 조언 업데이트
+  useEffect(() => {
+    if (!loading && inventory.length >= 0) {
+      fetchAIAdvice();
+    }
+  }, [inventory, loading]);
+
+  // 7일간 재고 추이 차트 데이터 생성
+  const generateChartData = useCallback(() => {
+    if (inventory.length === 0) {
+      setChartData(null);
+      return;
+    }
+
+    // 최근 7일 라벨 생성
+    const labels: string[] = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      labels.push(`${date.getMonth() + 1}/${date.getDate()}`);
+    }
+
+    // 상위 3개 품목 선택 (재고 부족 우선, 그 다음 현재 재고가 적은 순)
+    const sortedItems = [...inventory].sort((a, b) => {
+      if (a.isLowStock && !b.isLowStock) return -1;
+      if (!a.isLowStock && b.isLowStock) return 1;
+      return a.currentStock - b.currentStock;
+    }).slice(0, 3);
+
+    // 각 품목별 7일 추이 시뮬레이션 (실제 히스토리 데이터가 있다면 대체 필요)
+    const colors = [
+      () => '#ef4444', // 빨강
+      () => '#f59e0b', // 주황
+      () => '#3b82f6', // 파랑
+    ];
+
+    const datasets = sortedItems.map((item, index) => {
+      const baseStock = item.base_stock || item.currentStock * 1.5;
+      const currentStock = item.currentStock;
+      
+      // 7일 전부터 현재까지의 추이 시뮬레이션
+      // 실제로는 Supabase의 재고_히스토리 테이블에서 가져와야 함
+      const dailyConsumption = (baseStock - currentStock) / 7;
+      const data: number[] = [];
+      
+      for (let i = 0; i < 7; i++) {
+        const stockOnDay = Math.max(0, Math.round(baseStock - (dailyConsumption * i) + (Math.random() * 5 - 2.5)));
+        data.push(stockOnDay);
+      }
+      // 마지막 날은 현재 재고
+      data[6] = currentStock;
+
+      return {
+        data,
+        color: colors[index],
+        strokeWidth: 2,
+      };
+    });
+
+    const legend = sortedItems.map(item => 
+      item.itemName.length > 8 ? item.itemName.substring(0, 8) + '...' : item.itemName
+    );
+
+    setChartData({ labels, datasets, legend });
+
+    // 가장 빠르게 소진되는 품목 찾기
+    let maxDepletion = 0;
+    let fastestItem = '';
+    sortedItems.forEach((item) => {
+      const baseStock = item.base_stock || item.currentStock * 1.5;
+      const depletionRate = ((baseStock - item.currentStock) / baseStock) * 100;
+      if (depletionRate > maxDepletion) {
+        maxDepletion = depletionRate;
+        fastestItem = item.itemName;
+      }
+    });
+    setFastestDepletingItem(fastestItem);
+  }, [inventory]);
+
+  // 재고 데이터 변경 시 차트 업데이트
+  useEffect(() => {
+    if (!loading) {
+      generateChartData();
+    }
+  }, [inventory, loading, generateChartData]);
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#3b82f6" />
+        <ActivityIndicator size="large" color="#166534" />
         <Text style={styles.loadingText}>재고 데이터 불러오는 중...</Text>
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
+  // 헤더 컴포넌트 (FlatList와 ScrollView에서 재사용)
+  const renderHeaderContent = () => (
+    <>
       {/* 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>재고 현황</Text>
-        <TouchableOpacity 
-          onPress={onRefresh} 
-          style={styles.refreshButton}
-          disabled={refreshing}
-        >
-          <Animated.View style={{ transform: [{ rotate: spin }] }}>
-            <Ionicons 
-              name="refresh" 
-              size={24} 
-              color={refreshing ? "#93c5fd" : "#3b82f6"} 
-            />
-          </Animated.View>
-        </TouchableOpacity>
+        <View>
+          <Text style={styles.headerTitle}>재고 현황</Text>
+          <Text style={styles.headerSubtitle}>
+            {totalFiles}개 파일 · 총 {totalItems}개 품목
+          </Text>
+        </View>
+        <View style={styles.headerButtons}>
+          {/* 알림 테스트 버튼 */}
+          <TouchableOpacity 
+            onPress={() => {
+              if (lowStockItems > 0) {
+                sendLocalNotification(
+                  '⚠️ 재고 부족 알림',
+                  `${lowStockItems}개 품목의 재고가 부족합니다!`
+                );
+              } else {
+                sendLocalNotification(
+                  '✅ 재고 상태 양호',
+                  '현재 모든 품목의 재고가 충분합니다.'
+                );
+              }
+            }}
+            style={styles.notificationButton}
+          >
+            <Ionicons name="notifications" size={22} color="#166534" />
+          </TouchableOpacity>
+          {/* 새로고침 버튼 */}
+          <TouchableOpacity 
+            onPress={onRefresh} 
+            style={styles.refreshButton}
+            disabled={refreshing}
+          >
+            <Animated.View style={{ transform: [{ rotate: spin }] }}>
+              <Ionicons 
+                name="refresh" 
+                size={24} 
+                color={refreshing ? "#86EFAC" : "#166534"} 
+              />
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* AI 재고 요약 */}
@@ -316,18 +939,47 @@ export default function HomeScreen() {
         <Text style={styles.aiSummaryText}>{generateAISummary()}</Text>
       </View>
 
+      {/* 🔍 파일 검색창 */}
+      <View style={styles.searchContainer}>
+        <View style={[styles.searchInputWrapper, { flex: 1 }]}>
+          <Ionicons name="search" size={20} color="#9CA3AF" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="파일명 검색..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearButton}>
+              <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* 검색 결과 안내 */}
+      {searchQuery.length > 0 && (
+        <View style={styles.searchResultInfo}>
+          <Text style={styles.searchResultText}>
+            "{searchQuery}" 검색 결과: {filteredFileGroups.length}개 파일
+          </Text>
+        </View>
+      )}
+
       {/* 통계 카드 */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
-          <Ionicons name="cube-outline" size={24} color="#3b82f6" />
+          <Ionicons name="cube-outline" size={26} color="#166534" />
           <Text style={styles.statNumber}>{totalItems}</Text>
           <Text style={styles.statLabel}>전체 품목</Text>
         </View>
         <View style={[styles.statCard, lowStockItems > 0 && styles.alertStatCard]}>
           <Ionicons 
             name="warning-outline" 
-            size={24} 
-            color={lowStockItems > 0 ? "#dc2626" : "#9ca3af"} 
+            size={26} 
+            color={lowStockItems > 0 ? "#DC2626" : "#9CA3AF"} 
           />
           <Text style={[
             styles.statNumber, 
@@ -339,39 +991,491 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      {/* 발주 목록 공유 버튼 */}
+      {lowStockItems > 0 && (
+        <TouchableOpacity 
+          style={styles.shareButton}
+          onPress={shareOrderList}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="share-social" size={22} color="#FFFFFF" />
+          <Text style={styles.shareButtonText}>발주 목록 공유</Text>
+          <View style={styles.shareButtonBadge}>
+            <Text style={styles.shareButtonBadgeText}>{lowStockItems}</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* 7일간 재고 추이 그래프 */}
+      {chartData && inventory.length > 0 && (
+        <View style={styles.chartContainer}>
+          <View style={styles.chartHeader}>
+            <View style={styles.chartTitleContainer}>
+              <Ionicons name="trending-down" size={22} color="#166534" />
+              <Text style={styles.chartTitle}>7일간 재고 추이</Text>
+            </View>
+            {fastestDepletingItem && (
+              <View style={styles.fastestBadge}>
+                <Ionicons name="flash" size={14} color="#DC2626" />
+                <Text style={styles.fastestBadgeText}>
+                  {fastestDepletingItem.length > 6 
+                    ? fastestDepletingItem.substring(0, 6) + '...' 
+                    : fastestDepletingItem} 가장 빠름
+                </Text>
+              </View>
+            )}
+          </View>
+          
+          <LineChart
+            data={{
+              labels: chartData.labels,
+              datasets: chartData.datasets,
+              legend: chartData.legend,
+            }}
+            width={screenWidth - 48}
+            height={200}
+            chartConfig={{
+              backgroundColor: '#FFFFFF',
+              backgroundGradientFrom: '#FFFFFF',
+              backgroundGradientTo: '#FFFFFF',
+              decimalPlaces: 0,
+              color: (opacity = 1) => `rgba(22, 101, 52, ${opacity})`,
+              labelColor: (opacity = 1) => `rgba(107, 114, 128, ${opacity})`,
+              style: {
+                borderRadius: 16,
+              },
+              propsForDots: {
+                r: '5',
+                strokeWidth: '2',
+              },
+              propsForBackgroundLines: {
+                strokeDasharray: '',
+                stroke: '#E5E7EB',
+                strokeWidth: 1,
+              },
+            }}
+            bezier
+            style={styles.chart}
+            withInnerLines={true}
+            withOuterLines={false}
+            withVerticalLines={false}
+            withHorizontalLines={true}
+            withVerticalLabels={true}
+            withHorizontalLabels={true}
+            fromZero={true}
+          />
+          
+          {/* 범례 */}
+          <View style={styles.legendContainer}>
+            {chartData.legend.map((name, index) => (
+              <View key={index} style={styles.legendItem}>
+                <View style={[
+                  styles.legendDot, 
+                  { backgroundColor: chartData.datasets[index]?.color() || '#ccc' }
+                ]} />
+                <Text style={styles.legendText}>{name}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+
       {/* 에러 메시지 */}
       {error && (
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={20} color="#dc2626" />
+          <Ionicons name="alert-circle" size={22} color="#DC2626" />
           <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
 
-      {/* 재고 리스트 */}
-      {inventory.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Ionicons name="file-tray-outline" size={64} color="#d1d5db" />
-          <Text style={styles.emptyTitle}>재고 데이터가 없습니다</Text>
-          <Text style={styles.emptySubtitle}>
-            웹에서 [최종 확정]을 눌러 기준 재고를 설정해주세요
-          </Text>
+      {/* 📁 파일 목록 섹션 타이틀 */}
+      <View style={styles.fileListHeader}>
+        <View style={styles.fileListTitleContainer}>
+          <Ionicons name="folder-open" size={22} color="#166534" />
+          <Text style={styles.fileListTitle}>파일 목록</Text>
+          {filteredFileGroups.length > 0 && (
+            <Text style={styles.fileListCount}>({filteredFileGroups.length}개)</Text>
+          )}
+        </View>
+        <Text style={styles.fileListHint}>카드 클릭 시 상세 정보 표시</Text>
+      </View>
+    </>
+  );
+
+  // AI 경영 한마디 섹션 (푸터)
+  const renderAIAdviceSection = () => (
+    <View style={styles.aiAdviceContainer}>
+      <View style={styles.aiAdviceHeader}>
+        <View style={styles.aiAdviceIconContainer}>
+          <Ionicons name="bulb" size={22} color="#FFFFFF" />
+        </View>
+        <Text style={styles.aiAdviceTitle}>AI 경영 한마디</Text>
+        <TouchableOpacity 
+          onPress={fetchAIAdvice}
+          style={styles.aiAdviceRefreshButton}
+          disabled={aiAdviceLoading}
+        >
+          <Ionicons 
+            name="refresh" 
+            size={20} 
+            color={aiAdviceLoading ? "#BBF7D0" : "#166534"} 
+          />
+        </TouchableOpacity>
+      </View>
+      {aiAdviceLoading ? (
+        <View style={styles.aiAdviceLoadingContainer}>
+          <ActivityIndicator size="small" color="#166534" />
+          <Text style={styles.aiAdviceLoadingText}>AI가 분석 중...</Text>
         </View>
       ) : (
-        <FlatList
-          data={inventory}
-          renderItem={renderItem}
-          keyExtractor={(item) => `${item.id}`}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#3b82f6']}
-            />
-          }
-          showsVerticalScrollIndicator={false}
-        />
+        <Text style={styles.aiAdviceText}>{aiAdvice}</Text>
       )}
+    </View>
+  );
+
+  // 빈 상태 렌더링 (파일 리스트)
+  const renderEmptyList = () => {
+    if (fileGroups.length === 0) {
+      // 데이터 자체가 없는 경우
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="folder-open-outline" size={72} color="#D1D5DB" />
+          <Text style={styles.emptyTitle}>재고 데이터가 없습니다</Text>
+          <Text style={styles.emptySubtitle}>
+            웹에서 엑셀 파일을 업로드해주세요
+          </Text>
+        </View>
+      );
+    } else {
+      // 검색 결과가 없는 경우
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="search-outline" size={72} color="#D1D5DB" />
+          <Text style={styles.emptyTitle}>검색 결과가 없습니다</Text>
+          <Text style={styles.emptySubtitle}>
+            다른 파일명으로 검색해보세요
+          </Text>
+          <TouchableOpacity 
+            style={styles.clearFilterButton}
+            onPress={() => setSearchQuery('')}
+          >
+            <Text style={styles.clearFilterButtonText}>검색 초기화</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      {/* 재고 리스트 - FlatList 하나로 통합 */}
+      {/* 📁 파일 리스트 (메인 화면) - 2열 그리드 */}
+      <FlatList
+        data={filteredFileGroups}
+        renderItem={renderFileCard}
+        keyExtractor={(item) => item.fileName}
+        numColumns={2}
+        columnWrapperStyle={filteredFileGroups.length > 1 ? styles.fileGridRow : undefined}
+        contentContainerStyle={[
+          styles.listContent,
+          filteredFileGroups.length === 0 && styles.emptyListContent
+        ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#166534']}
+          />
+        }
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={renderHeaderContent}
+        ListEmptyComponent={renderEmptyList}
+        ListFooterComponent={
+          <>
+            {renderAIAdviceSection()}
+            <View style={styles.listBottomPadding} />
+          </>
+        }
+      />
+
+      {/* 📁 파일 상세 모달 (라이트 모드) */}
+      <Modal
+        visible={fileDetailModalVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setFileDetailModalVisible(false)}
+      >
+        <View style={styles.detailModalContainer}>
+          {/* 상세 모달 헤더 */}
+          <View style={styles.detailModalHeader}>
+            <TouchableOpacity 
+              style={styles.detailBackButton}
+              onPress={() => setFileDetailModalVisible(false)}
+            >
+              <Ionicons name="arrow-back" size={24} color="#111111" />
+            </TouchableOpacity>
+            <View style={styles.detailHeaderInfo}>
+              <Text style={styles.detailModalTitle} numberOfLines={1}>
+                {selectedFileGroup?.fileName.replace(/\.[^/.]+$/, '')}
+              </Text>
+              <Text style={styles.detailModalSubtitle}>
+                {selectedFileGroup?.totalItems}개 품목
+              </Text>
+            </View>
+            {/* 새로고침 버튼 */}
+            <TouchableOpacity 
+              style={styles.detailRefreshButton}
+              onPress={onRefresh}
+            >
+              <Ionicons name="refresh" size={20} color="#166534" />
+            </TouchableOpacity>
+          </View>
+
+          {/* 상세 모달 액션 버튼들 */}
+          <View style={styles.detailActionBar}>
+            {/* 재고 부족 배지 */}
+            {(selectedFileGroup?.lowStockCount ?? 0) > 0 && (
+              <View style={styles.detailAlertBadge}>
+                <Ionicons name="warning" size={14} color="#fff" />
+                <Text style={styles.detailAlertBadgeText}>
+                  재고 부족 {selectedFileGroup?.lowStockCount}개
+                </Text>
+              </View>
+            )}
+            {/* 유통기한 임박 배지 */}
+            {(selectedFileGroup?.expiringCount ?? 0) > 0 && (
+              <View style={styles.detailExpiringBadge}>
+                <Ionicons name="time" size={14} color="#fff" />
+                <Text style={styles.detailExpiringBadgeText}>
+                  폐기 임박 {selectedFileGroup?.expiringCount}개
+                </Text>
+              </View>
+            )}
+            {/* 파일 삭제 버튼 */}
+            <TouchableOpacity 
+              style={styles.detailDeleteButton}
+              onPress={() => {
+                Alert.alert(
+                  '파일 삭제',
+                  `"${selectedFileGroup?.fileName}" 파일의 모든 데이터를 삭제하시겠습니까?`,
+                  [
+                    { text: '취소', style: 'cancel' },
+                    {
+                      text: '삭제',
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          const { error } = await supabase
+                            .from('재고')
+                            .delete()
+                            .eq('file_name', selectedFileGroup?.fileName);
+                          if (error) throw error;
+                          setFileDetailModalVisible(false);
+                          Alert.alert('완료', '파일이 삭제되었습니다.');
+                          fetchInventory();
+                        } catch (err) {
+                          Alert.alert('오류', '삭제 중 오류가 발생했습니다.');
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="trash-outline" size={16} color="#DC2626" />
+              <Text style={styles.detailDeleteButtonText}>삭제</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 상세 모달 검색창 */}
+          <View style={styles.detailSearchContainer}>
+            <View style={styles.detailSearchInputWrapper}>
+              <Ionicons name="search" size={18} color="#9CA3AF" />
+              <TextInput
+                style={styles.detailSearchInput}
+                placeholder="품목명 검색..."
+                placeholderTextColor="#9CA3AF"
+                value={detailSearchQuery}
+                onChangeText={setDetailSearchQuery}
+                returnKeyType="search"
+              />
+              {detailSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setDetailSearchQuery('')}>
+                  <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={styles.detailSearchCount}>
+              {filteredDetailItems.length}개 표시
+            </Text>
+          </View>
+
+          {/* 테이블 헤더 */}
+          <View style={styles.detailTableHeader}>
+            <Text style={[styles.detailTableHeaderText, { flex: 2 }]}>품목명</Text>
+            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>현재</Text>
+            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>기준</Text>
+            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>상태</Text>
+          </View>
+
+          {/* 상세 품목 리스트 (테이블 형태) */}
+          <FlatList
+            data={filteredDetailItems}
+            renderItem={({ item, index }) => (
+              <TouchableOpacity 
+                style={[
+                  styles.detailTableRow,
+                  index % 2 === 1 && styles.detailTableRowAlt,
+                  item.isLowStock && styles.detailTableRowAlert,
+                  item.isExpired && styles.detailTableRowExpired,
+                ]}
+                onPress={() => openEditModal(item)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flex: 2 }}>
+                  <Text style={styles.detailTableItemName} numberOfLines={1}>
+                    {item.itemName}
+                  </Text>
+                  {item.expiry_date && (
+                    <Text style={[
+                      styles.detailTableItemExpiry,
+                      item.isExpired && { color: '#DC2626' },
+                      item.isExpiringSoon && { color: '#D97706' },
+                    ]}>
+                      {item.isExpired ? '만료됨' : `D-${item.daysUntilExpiry}`}
+                    </Text>
+                  )}
+                </View>
+                <Text style={[
+                  styles.detailTableCell, 
+                  { flex: 1, textAlign: 'center' },
+                  item.isLowStock && styles.detailTableCellAlert
+                ]}>
+                  {item.currentStock.toLocaleString()}
+                </Text>
+                <Text style={[styles.detailTableCell, { flex: 1, textAlign: 'center' }]}>
+                  {(item.base_stock || 0).toLocaleString()}
+                </Text>
+                <View style={{ flex: 1, alignItems: 'center' }}>
+                  {item.isExpired ? (
+                    <View style={styles.detailStatusBadgeExpired}>
+                      <Text style={styles.detailStatusBadgeExpiredText}>폐기</Text>
+                    </View>
+                  ) : item.isExpiringSoon ? (
+                    <View style={styles.detailStatusBadgeExpiring}>
+                      <Text style={styles.detailStatusBadgeExpiringText}>임박</Text>
+                    </View>
+                  ) : item.isLowStock ? (
+                    <View style={styles.detailStatusBadgeAlert}>
+                      <Text style={styles.detailStatusBadgeAlertText}>부족</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.detailStatusBadgeNormal}>
+                      <Text style={styles.detailStatusBadgeNormalText}>정상</Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            )}
+            keyExtractor={(item) => `${item.id}`}
+            contentContainerStyle={styles.detailTableContent}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={
+              <View style={styles.detailEmptyContainer}>
+                <Ionicons name="search-outline" size={56} color="#D1D5DB" />
+                <Text style={styles.detailEmptyTitle}>검색 결과가 없습니다</Text>
+              </View>
+            }
+          />
+        </View>
+      </Modal>
+
+      {/* 수정 모달 */}
+      <Modal
+        visible={editModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeEditModal}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>재고 수정</Text>
+              <TouchableOpacity onPress={closeEditModal} style={styles.modalCloseButton}>
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            
+            {selectedItem && (
+              <>
+                <Text style={styles.modalItemName}>{selectedItem.itemName}</Text>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>현재 재고</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editCurrentStock}
+                    onChangeText={setEditCurrentStock}
+                    keyboardType="numeric"
+                    placeholder="현재 재고 수량"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>기준 재고</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editBaseStock}
+                    onChangeText={setEditBaseStock}
+                    keyboardType="numeric"
+                    placeholder="기준 재고 수량"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>유통기한</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editExpiryDate}
+                    onChangeText={setEditExpiryDate}
+                    placeholder="YYYY-MM-DD (예: 2026-12-31)"
+                    placeholderTextColor="#9ca3af"
+                    autoCapitalize="none"
+                  />
+                  <Text style={styles.inputHint}>
+                    비워두면 유통기한 없음으로 설정됩니다
+                  </Text>
+                </View>
+                
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity 
+                    style={styles.cancelButton} 
+                    onPress={closeEditModal}
+                  >
+                    <Text style={styles.cancelButtonText}>취소</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.saveButton, saving && styles.saveButtonDisabled]} 
+                    onPress={saveInventoryChanges}
+                    disabled={saving}
+                  >
+                    {saving ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.saveButtonText}>저장</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -379,56 +1483,148 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#FFFFFF',
+  },
+  scrollContainer: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  listBottomPadding: {
+    height: 100, // 하단 탭바가 가리지 않도록 충분한 여백
+  },
+  // 검색창 스타일
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginTop: 16,
+    gap: 10,
+  },
+  searchInputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 12,
+    height: 46,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#111111',
+    paddingVertical: 0,
+  },
+  searchClearButton: {
+    padding: 4,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    gap: 4,
+  },
+  filterButtonActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  filterButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#166534',
+  },
+  filterButtonTextActive: {
+    color: '#FFFFFF',
+  },
+  searchResultInfo: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 8,
+  },
+  searchResultText: {
+    fontSize: 13,
+    color: '#166534',
+    fontWeight: '500',
+  },
+  clearFilterButton: {
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: '#166534',
+    borderRadius: 10,
+  },
+  clearFilterButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  emptyListContent: {
+    flexGrow: 1,
   },
   aiSummaryContainer: {
     marginHorizontal: 16,
     marginTop: 16,
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
     borderWidth: 1,
-    borderColor: '#e0e7ff',
-    shadowColor: '#6366f1',
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    elevation: 2,
   },
   aiSummaryHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   aiIconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#6366f1',
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#166534',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 10,
+    marginRight: 12,
   },
   aiSummaryTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
-    color: '#4338ca',
+    color: '#166534',
   },
   aiSummaryText: {
-    fontSize: 15,
-    color: '#374151',
-    lineHeight: 22,
+    fontSize: 16,
+    color: '#111111',
+    lineHeight: 26,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#FFFFFF',
   },
   loadingText: {
     marginTop: 12,
-    fontSize: 16,
-    color: '#6b7280',
+    fontSize: 17,
+    color: '#6B7280',
+    fontWeight: '500',
   },
   header: {
     flexDirection: 'row',
@@ -436,140 +1632,637 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 60,
-    paddingBottom: 16,
-    backgroundColor: '#fff',
+    paddingBottom: 18,
+    backgroundColor: '#F8F9FA',
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: '#E5E7EB',
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  notificationButton: {
+    padding: 10,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#111827',
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#111111',
+    letterSpacing: -0.5,
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
   },
   refreshButton: {
-    padding: 8,
+    padding: 10,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
   },
   statsContainer: {
     flexDirection: 'row',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     gap: 12,
+    backgroundColor: '#FFFFFF',
   },
   statCard: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   alertStatCard: {
-    backgroundColor: '#fef2f2',
+    backgroundColor: '#FEF2F2',
     borderWidth: 1,
-    borderColor: '#fecaca',
+    borderColor: '#FECACA',
   },
   statNumber: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginTop: 4,
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#111111',
+    marginTop: 6,
   },
   alertStatNumber: {
-    color: '#dc2626',
+    color: '#DC2626',
   },
   statLabel: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 2,
+    fontSize: 15,
+    color: '#6B7280',
+    marginTop: 4,
+    fontWeight: '500',
   },
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fef2f2',
+    backgroundColor: '#FEF2F2',
     marginHorizontal: 16,
-    padding: 12,
-    borderRadius: 8,
-    gap: 8,
+    padding: 14,
+    borderRadius: 14,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#FECACA',
   },
   errorText: {
     flex: 1,
-    color: '#dc2626',
-    fontSize: 14,
+    color: '#DC2626',
+    fontSize: 15,
+    fontWeight: '500',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 40,
+    backgroundColor: '#FFFFFF',
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 16,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111111',
+    marginTop: 20,
   },
   emptySubtitle: {
-    fontSize: 14,
-    color: '#9ca3af',
+    fontSize: 16,
+    color: '#6B7280',
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 10,
+    lineHeight: 24,
   },
   listContent: {
-    padding: 16,
+    paddingTop: 0,
     paddingBottom: 100,
+    backgroundColor: '#FFFFFF',
+  },
+  // 📁 파일 그리드 스타일 (웹과 동일)
+  fileGridRow: {
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+  },
+  fileCardWrapper: {
+    width: '48%',
+    marginBottom: 12,
+  },
+  fileCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  fileCardGradientLine: {
+    height: 4,
+    width: '100%',
+  },
+  fileCardContent: {
+    padding: 14,
+  },
+  fileCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  fileIconContainer: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fileCardInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileCardName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111111',
+    marginBottom: 4,
+  },
+  fileCardRowCount: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  fileCardRowNumber: {
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  fileCardRowLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  fileCardProgress: {
+    marginTop: 12,
+  },
+  fileCardProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  fileCardProgressLabel: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  fileCardProgressPercent: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  fileCardProgressBar: {
+    height: 5,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  fileCardProgressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  fileCardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F9FAFB',
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  fileCardViewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  fileCardViewText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  fileCardDeleteButton: {
+    padding: 4,
+  },
+  fileCardBadges: {
+    position: 'absolute',
+    top: 12,
+    right: 10,
+    flexDirection: 'row',
+    gap: 4,
+  },
+  fileCardAlertBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  fileCardAlertBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  fileCardExpiringBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  fileCardExpiringBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  // 파일 목록 헤더
+  fileListHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  fileListTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  fileListTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  fileListCount: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  fileListHint: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  // 📁 파일 상세 모달 스타일 (라이트 모드)
+  detailModalContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  detailModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    paddingTop: Platform.OS === 'ios' ? 56 : 14,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  detailBackButton: {
+    padding: 8,
+    marginRight: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+  },
+  detailHeaderInfo: {
+    flex: 1,
+  },
+  detailModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  detailModalSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  detailRefreshButton: {
+    padding: 10,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  // 상세 모달 액션 바
+  detailActionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#F9FAFB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  detailAlertBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  detailAlertBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  detailExpiringBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  detailExpiringBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  detailDeleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    marginLeft: 'auto',
+  },
+  detailDeleteButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  // 상세 모달 검색창
+  detailSearchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  detailSearchInputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginRight: 12,
+    gap: 8,
+  },
+  detailSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111111',
+    padding: 0,
+  },
+  detailSearchCount: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  // 테이블 헤더
+  detailTableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  detailTableHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+  },
+  // 테이블 행
+  detailTableContent: {
+    paddingBottom: 40,
+  },
+  detailTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  detailTableRowAlt: {
+    backgroundColor: '#FAFAFA',
+  },
+  detailTableRowAlert: {
+    backgroundColor: '#FEF2F2',
+  },
+  detailTableRowExpired: {
+    backgroundColor: '#FEE2E2',
+  },
+  detailTableItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111111',
+  },
+  detailTableItemExpiry: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  detailTableCell: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  detailTableCellAlert: {
+    color: '#DC2626',
+    fontWeight: '700',
+  },
+  // 상태 배지
+  detailStatusBadgeNormal: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  detailStatusBadgeNormalText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  detailStatusBadgeAlert: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  detailStatusBadgeAlertText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  detailStatusBadgeExpiring: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  detailStatusBadgeExpiringText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#D97706',
+  },
+  detailStatusBadgeExpired: {
+    backgroundColor: '#374151',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  detailStatusBadgeExpiredText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  // 빈 상태
+  detailEmptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  detailEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    marginTop: 12,
   },
   itemCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   lowStockCard: {
     borderWidth: 2,
-    borderColor: '#fecaca',
-    backgroundColor: '#fffbfb',
+    borderColor: '#FECACA',
+    backgroundColor: '#FFFBFB',
+  },
+  expiredCard: {
+    borderWidth: 2,
+    borderColor: '#991B1B',
+    backgroundColor: '#FEF2F2',
+  },
+  expiringSoonCard: {
+    borderWidth: 2,
+    borderColor: '#FBBF24',
+    backgroundColor: '#FFFBEB',
   },
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   itemName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111111',
     flex: 1,
-    marginRight: 8,
+    marginRight: 10,
   },
   alertBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#dc2626',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    gap: 5,
   },
   alertBadgeText: {
-    color: '#fff',
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  expiredBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#7F1D1D',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    gap: 5,
+  },
+  expiredBadgeText: {
+    color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+  expiringSoonBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: '#FBBF24',
+  },
+  expiringSoonBadgeText: {
+    color: '#92400E',
+    fontSize: 12,
+    fontWeight: '700',
   },
   stockInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
   stockColumn: {
     flex: 1,
@@ -577,45 +2270,371 @@ const styles = StyleSheet.create({
   },
   stockDivider: {
     width: 1,
-    height: 40,
-    backgroundColor: '#e5e7eb',
+    height: 48,
+    backgroundColor: '#E5E7EB',
   },
   stockLabel: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginBottom: 4,
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 6,
+    fontWeight: '500',
   },
   stockValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#111827',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#111111',
   },
   lowStockValue: {
-    color: '#dc2626',
+    color: '#DC2626',
+  },
+  expiryValue: {
+    fontSize: 18,
+  },
+  expiredValue: {
+    color: '#7F1D1D',
+    fontWeight: '800',
+  },
+  expiringSoonValue: {
+    color: '#B45309',
+    fontWeight: '800',
   },
   shortageValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#dc2626',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
+  expiredMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FECACA',
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 12,
+    gap: 10,
+  },
+  expiredText: {
+    flex: 1,
+    color: '#7F1D1D',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  expiringSoonMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 12,
+    gap: 10,
+  },
+  expiringSoonText: {
+    flex: 1,
+    color: '#92400E',
+    fontSize: 15,
+    fontWeight: '500',
   },
   alertMessage: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fef2f2',
-    marginTop: 12,
-    padding: 10,
-    borderRadius: 8,
-    gap: 8,
+    backgroundColor: '#FEF2F2',
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 12,
+    gap: 10,
   },
   alertText: {
     flex: 1,
-    color: '#dc2626',
-    fontSize: 13,
+    color: '#DC2626',
+    fontSize: 15,
     fontWeight: '500',
   },
   fileName: {
-    fontSize: 12,
-    color: '#9ca3af',
+    fontSize: 13,
+    color: '#9CA3AF',
+    marginTop: 14,
+    fontWeight: '500',
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  editButtonText: {
+    color: '#166534',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111111',
+  },
+  modalCloseButton: {
+    padding: 6,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+  },
+  modalItemName: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111111',
+    marginBottom: 24,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  inputGroup: {
+    marginBottom: 18,
+  },
+  inputLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111111',
+    marginBottom: 10,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 17,
+    color: '#111111',
+    backgroundColor: '#F9FAFB',
+  },
+  inputHint: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 14,
     marginTop: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  saveButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: '#166534',
+    alignItems: 'center',
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#86EFAC',
+  },
+  saveButtonText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  aiAdviceContainer: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 10,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    shadowColor: '#166534',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  aiAdviceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  aiAdviceIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#166534',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  aiAdviceTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#166534',
+    flex: 1,
+  },
+  aiAdviceRefreshButton: {
+    padding: 8,
+    backgroundColor: '#DCFCE7',
+    borderRadius: 10,
+  },
+  aiAdviceText: {
+    fontSize: 16,
+    color: '#111111',
+    lineHeight: 26,
+    fontWeight: '500',
+  },
+  aiAdviceLoadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  aiAdviceLoadingText: {
+    fontSize: 15,
+    color: '#166534',
+    fontWeight: '500',
+  },
+  shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#166534',
+    marginHorizontal: 16,
+    marginBottom: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    gap: 10,
+    shadowColor: '#166534',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  shareButtonText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  shareButtonBadge: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 6,
+  },
+  shareButtonBadgeText: {
+    color: '#166534',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  chartContainer: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  chartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  chartTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  chartTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  fastestBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  fastestBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  chart: {
+    marginVertical: 10,
+    borderRadius: 16,
+  },
+  legendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 18,
+    marginTop: 10,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  legendText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
   },
 });

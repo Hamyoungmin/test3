@@ -58,12 +58,12 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        relative border-2 border-dashed rounded-2xl p-12
+        relative border-2 border-dashed rounded-2xl p-12 bg-white
         transition-all duration-300 ease-out
         ${
           isDragging
-            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 scale-[1.02]'
-            : 'border-slate-300 dark:border-slate-600 hover:border-indigo-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            ? 'border-green-500 bg-green-50 scale-[1.02]'
+            : 'border-gray-300 hover:border-green-400 hover:bg-gray-50'
         }
         ${isLoading ? 'pointer-events-none opacity-60' : 'cursor-pointer'}
       `}
@@ -79,8 +79,8 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
       <div className="flex flex-col items-center gap-4 text-center">
         {isLoading ? (
           <>
-            <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-lg font-medium text-slate-700 dark:text-slate-200">
+            <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-lg font-medium text-gray-700">
               파일 처리 중...
             </p>
           </>
@@ -89,12 +89,12 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
             <div
               className={`
                 p-4 rounded-2xl transition-colors duration-300
-                ${isDragging ? 'bg-indigo-100 dark:bg-indigo-900/50' : 'bg-slate-100 dark:bg-slate-800'}
+                ${isDragging ? 'bg-green-100' : 'bg-gray-100'}
               `}
             >
               <svg
                 className={`w-12 h-12 transition-colors duration-300 ${
-                  isDragging ? 'text-indigo-500' : 'text-slate-400 dark:text-slate-500'
+                  isDragging ? 'text-green-600' : 'text-gray-400'
                 }`}
                 fill="none"
                 stroke="currentColor"
@@ -110,15 +110,15 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
             </div>
 
             <div>
-              <p className="text-lg font-semibold text-slate-700 dark:text-slate-200">
+              <p className="text-lg font-semibold text-gray-700">
                 {isDragging ? '여기에 파일을 놓으세요' : '엑셀 파일을 드래그하거나 클릭하세요'}
               </p>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-1 text-sm text-gray-500">
                 .xlsx, .xls, .csv 파일 지원
               </p>
             </div>
 
-            <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-medium transition-colors">
+            <div className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 text-white rounded-xl font-medium transition-colors">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"

@@ -160,7 +160,7 @@ function EditableCell({
   return (
     <div
       onClick={onStartEdit}
-      className={`w-full h-full px-2 py-1.5 cursor-pointer hover:bg-[#0f3460] transition-colors truncate ${
+      className={`w-full h-full px-2 py-1.5 cursor-pointer hover:bg-green-50 transition-colors truncate ${
         isNumeric ? 'text-right font-mono' : ''
       }`}
       title={String(value ?? '')}
@@ -210,29 +210,29 @@ function ConfirmBaseStockModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#16213e] rounded-xl border border-[#0f3460] shadow-2xl w-full max-w-md mx-4">
-        <div className="px-6 py-4 border-b border-[#0f3460]">
-          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-            <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-2xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             기준 재고 확정
           </h3>
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-gray-500 mt-1">
             이 수치를 기준으로 재고가 부족해지면 알람이 발생합니다
           </p>
         </div>
         
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="bg-[#0f3460] rounded-lg p-3">
-            <p className="text-sm text-gray-300">
-              품목: <span className="text-white font-medium">{itemName || `행 #${rowId}`}</span>
+          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+            <p className="text-sm text-gray-600">
+              품목: <span className="text-gray-900 font-medium">{itemName || `행 #${rowId}`}</span>
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               기준 재고 수량
             </label>
             <input
@@ -241,7 +241,7 @@ function ConfirmBaseStockModal({
               min="0"
               value={baseStock}
               onChange={(e) => setBaseStock(Number(e.target.value))}
-              className="w-full px-4 py-2.5 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-white text-lg font-mono focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 text-lg font-mono focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
             />
             <p className="text-xs text-gray-500 mt-1">
               현재 재고가 이 수치 아래로 떨어지면 빨간색 알림이 표시됩니다
@@ -252,14 +252,14 @@ function ConfirmBaseStockModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2.5 bg-[#0f3460] hover:bg-[#1a1a2e] text-gray-300 rounded-lg font-medium transition-colors"
+              className="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
             >
               취소
             </button>
             <button
               type="submit"
               disabled={isConfirming}
-              className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 text-white rounded-lg font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isConfirming ? (
                 <>
@@ -315,16 +315,16 @@ function AddColumnModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#16213e] rounded-xl border border-[#0f3460] shadow-2xl w-full max-w-md mx-4">
-        <div className="px-6 py-4 border-b border-[#0f3460]">
-          <h3 className="text-lg font-semibold text-white">새 컬럼 추가</h3>
-          <p className="text-xs text-gray-400 mt-1">DB 스키마에 새로운 컬럼을 추가합니다</p>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-2xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900">새 컬럼 추가</h3>
+          <p className="text-xs text-gray-500 mt-1">DB 스키마에 새로운 컬럼을 추가합니다</p>
         </div>
         
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               컬럼 이름
             </label>
             <input
@@ -333,19 +333,19 @@ function AddColumnModal({
               value={columnName}
               onChange={(e) => setColumnName(e.target.value)}
               placeholder="예: 수량, price, 카테고리"
-              className="w-full px-4 py-2.5 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-white placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none"
             />
             <p className="text-xs text-gray-500 mt-1">영문, 숫자, 한글, 언더스코어 사용 가능</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               데이터 타입
             </label>
             <select
               value={columnType}
               onChange={(e) => setColumnType(e.target.value)}
-              className="w-full px-4 py-2.5 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none"
             >
               <option value="text">텍스트 (TEXT)</option>
               <option value="number">숫자 (NUMERIC)</option>
@@ -360,14 +360,14 @@ function AddColumnModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2.5 bg-[#0f3460] hover:bg-[#1a1a2e] text-gray-300 rounded-lg font-medium transition-colors"
+              className="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
             >
               취소
             </button>
             <button
               type="submit"
               disabled={!columnName.trim() || isAdding}
-              className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 text-white rounded-lg font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-2.5 bg-violet-600 hover:bg-violet-700 disabled:bg-violet-300 text-white rounded-lg font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isAdding ? (
                 <>
@@ -1171,32 +1171,32 @@ export default function EditPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#1a1a2e] flex items-center justify-center">
+      <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-gray-400">데이터 로딩 중...</p>
+          <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-gray-600">데이터 로딩 중...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#1a1a2e] text-gray-100">
+    <div className="min-h-screen bg-white">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-[#16213e] border-b border-[#0f3460] shadow-lg">
+      <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
         <div className="w-full px-4">
-          <div className="flex items-center justify-between h-12">
+          <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-600 rounded-lg flex items-center justify-center">
+              <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-red-600 rounded-lg flex items-center justify-center shadow-sm">
                 <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
               </div>
               <div>
-                <h1 className="text-sm font-bold text-white truncate max-w-[400px]" title={decodeURIComponent(fileId)}>
+                <h1 className="text-sm font-bold text-gray-900 truncate max-w-[400px]" title={decodeURIComponent(fileId)}>
                   {decodeURIComponent(fileId)}
                 </h1>
-                <p className="text-xs text-gray-400">
+                <p className="text-xs text-gray-500">
                   셀을 클릭하여 수정 • Enter로 저장 • Esc로 취소
                 </p>
               </div>
@@ -1205,7 +1205,7 @@ export default function EditPage() {
             <div className="flex items-center gap-2">
               {/* 저장 상태 표시 */}
               {isSaving && (
-                <span className="flex items-center gap-1 px-2 py-1 bg-indigo-500/20 text-indigo-400 text-xs rounded">
+                <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs rounded">
                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -1218,8 +1218,8 @@ export default function EditPage() {
               {message && (
                 <span className={`px-2 py-1 text-xs rounded ${
                   message.type === 'success' 
-                    ? 'bg-emerald-500/20 text-emerald-400' 
-                    : 'bg-red-500/20 text-red-400'
+                    ? 'bg-green-100 text-green-700' 
+                    : 'bg-red-100 text-red-700'
                 }`}>
                   {message.text}
                 </span>
@@ -1229,11 +1229,11 @@ export default function EditPage() {
               <button
                 onClick={handleBatchSave}
                 disabled={unsavedChangesCount === 0 || isSaving}
-                className={`flex items-center gap-1.5 px-4 py-1.5 text-white text-xs font-medium rounded-lg transition-all ${
+                className={`flex items-center gap-1.5 px-4 py-2 text-white text-xs font-medium rounded-lg transition-all shadow-sm ${
                   unsavedChangesCount > 0
-                    ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 shadow-lg shadow-orange-500/30 animate-pulse'
-                    : 'bg-gray-600 cursor-not-allowed'
-                } disabled:opacity-50 disabled:cursor-not-allowed disabled:animate-none`}
+                    ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600'
+                    : 'bg-gray-400 cursor-not-allowed'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 {isSaving ? (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1251,7 +1251,7 @@ export default function EditPage() {
               {/* 새 행 추가 */}
               <button
                 onClick={handleAddRow}
-                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-colors"
+                className="flex items-center gap-1 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1262,7 +1262,7 @@ export default function EditPage() {
               {/* 새 컬럼 추가 */}
               <button
                 onClick={() => setShowAddColumnModal(true)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition-colors"
+                className="flex items-center gap-1 px-3 py-2 bg-violet-500 hover:bg-violet-600 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
@@ -1274,7 +1274,7 @@ export default function EditPage() {
               <button
                 onClick={handleBulkConfirm}
                 disabled={data.length === 0 || isBulkConfirming}
-                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 text-white text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+                className="flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed shadow-sm"
               >
                 {isBulkConfirming ? (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1293,7 +1293,7 @@ export default function EditPage() {
               <button
                 onClick={handleExportExcel}
                 disabled={data.length === 0 || isSaving}
-                className="flex items-center gap-1 px-3 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:bg-teal-600/50 text-white text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+                className="flex items-center gap-1 px-3 py-2 bg-teal-500 hover:bg-teal-600 disabled:bg-teal-300 text-white text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1304,7 +1304,7 @@ export default function EditPage() {
               {/* 파일 상세 페이지로 */}
               <Link
                 href={`/management/file/${encodeURIComponent(decodeURIComponent(fileId))}`}
-                className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors"
+                className="flex items-center gap-1 px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
@@ -1317,7 +1317,7 @@ export default function EditPage() {
       </header>
 
       {/* AI 경영 브리핑 섹션 */}
-      <div className="px-4 py-4 bg-[#1a1a2e]">
+      <div className="px-4 py-4 bg-gray-50">
         <AIBriefing 
           data={data}
           headers={headers}
@@ -1327,17 +1327,17 @@ export default function EditPage() {
       </div>
 
       {/* Stats Bar + Search */}
-      <div className="bg-[#16213e] border-b border-[#0f3460] px-4 py-2">
+      <div className="bg-white border-b border-gray-200 px-4 py-2">
         <div className="flex items-center justify-between">
           {/* 왼쪽: 통계 정보 */}
-          <div className="flex items-center gap-4 text-xs text-gray-400">
-            <span>총 <span className="text-white font-medium">{data.length}</span> 행</span>
+          <div className="flex items-center gap-4 text-xs text-gray-500">
+            <span>총 <span className="text-gray-900 font-medium">{data.length}</span> 행</span>
             <span>•</span>
-            <span><span className="text-white font-medium">{headers.length}</span> 컬럼</span>
+            <span><span className="text-gray-900 font-medium">{headers.length}</span> 컬럼</span>
             {searchQuery && (
               <>
                 <span>•</span>
-                <span className="text-cyan-400">
+                <span className="text-cyan-600">
                   검색 결과: <span className="font-medium">{filteredData.length}</span>개
                 </span>
               </>
@@ -1345,7 +1345,7 @@ export default function EditPage() {
             {sortConfig.column && (
               <>
                 <span>•</span>
-                <span className="text-violet-400">
+                <span className="text-violet-600">
                   정렬: {sortConfig.column} ({sortConfig.direction === 'asc' ? '오름차순' : '내림차순'})
                 </span>
               </>
@@ -1353,7 +1353,7 @@ export default function EditPage() {
             {modifiedRows.size > 0 && (
               <>
                 <span>•</span>
-                <span className="text-orange-400">
+                <span className="text-orange-600">
                   <span className="font-medium">{modifiedRows.size}</span>개 수정됨
                 </span>
               </>
@@ -1361,7 +1361,7 @@ export default function EditPage() {
             {newRows.size > 0 && (
               <>
                 <span>•</span>
-                <span className="text-emerald-400">
+                <span className="text-emerald-600">
                   <span className="font-medium">{newRows.size}</span>개 새 행
                 </span>
               </>
@@ -1369,7 +1369,7 @@ export default function EditPage() {
             {unsavedChangesCount > 0 && (
               <>
                 <span>•</span>
-                <span className="text-yellow-400 font-medium animate-pulse">
+                <span className="text-yellow-600 font-medium">
                   저장되지 않은 변경사항 {unsavedChangesCount}개
                 </span>
               </>
@@ -1377,7 +1377,7 @@ export default function EditPage() {
             {data.filter(row => row.alarm_status && row.base_stock !== null).length > 0 && (
               <>
                 <span>•</span>
-                <span className="text-red-400 font-medium animate-pulse">
+                <span className="text-red-600 font-medium">
                   🚨 재고부족 {data.filter(row => row.alarm_status && row.base_stock !== null).length}개
                 </span>
               </>
@@ -1388,7 +1388,7 @@ export default function EditPage() {
           <div className="flex items-center gap-2">
             <div className="relative">
               <svg 
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" 
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" 
                 fill="none" 
                 stroke="currentColor" 
                 viewBox="0 0 24 24"
@@ -1400,12 +1400,12 @@ export default function EditPage() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="검색어 입력..."
-                className="w-64 pl-9 pr-8 py-1.5 bg-[#0f3460] border border-[#1a1a2e] rounded-lg text-sm text-white placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                className="w-64 pl-9 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-gray-300 transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1417,7 +1417,7 @@ export default function EditPage() {
             {sortConfig.column && (
               <button
                 onClick={() => setSortConfig({ column: null, direction: null })}
-                className="px-2 py-1.5 text-xs bg-violet-600/30 text-violet-300 rounded-lg hover:bg-violet-600/50 transition-colors"
+                className="px-2 py-1.5 text-xs bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200 transition-colors"
                 title="정렬 초기화"
               >
                 정렬 해제
@@ -1429,7 +1429,7 @@ export default function EditPage() {
 
       {/* Grid Editor - LTR 정렬 + 드래그 스크롤 */}
       <div 
-        className={`w-full overflow-x-auto overflow-y-auto ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`w-full overflow-x-auto overflow-y-auto bg-white ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         ref={(el) => {
           // 두 ref를 모두 연결
           (tableRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
@@ -1440,13 +1440,13 @@ export default function EditPage() {
       >
         {data.length === 0 && headers.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-[500px]">
-            <div className="w-16 h-16 bg-[#0f3460] rounded-full flex items-center justify-center mb-4">
-              <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </div>
-            <p className="text-gray-400 mb-4">데이터가 없습니다.</p>
-            <Link href="/" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-lg">
+            <p className="text-gray-600 mb-4">데이터가 없습니다.</p>
+            <Link href="/" className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg shadow-sm">
               엑셀 업로드하러 가기
             </Link>
           </div>
@@ -1454,9 +1454,9 @@ export default function EditPage() {
           <table className="border-collapse text-left" style={{ minWidth: Math.max(headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50, 800) }}>
             {/* Header */}
             <thead className="sticky top-0 z-10">
-              <tr className="bg-[#0f3460]">
+              <tr className="bg-gray-50">
                 {/* 액션 컬럼 */}
-                <th className="w-14 px-1 py-2 text-center text-xs font-semibold text-gray-400 border border-[#1a1a2e] bg-[#0f3460] sticky left-0 z-20">
+                <th className="w-14 px-1 py-3 text-center text-xs font-semibold text-gray-500 border border-gray-200 bg-gray-50 sticky left-0 z-20">
                   
                 </th>
                 {headers.map((header) => {
@@ -1468,12 +1468,12 @@ export default function EditPage() {
                       key={header}
                       onClick={() => handleSort(header)}
                       style={{ width: getColumnWidth(header), minWidth: getColumnWidth(header) }}
-                      className={`px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider border border-[#1a1a2e] cursor-pointer select-none transition-colors group ${
+                      className={`px-2 py-3 text-left text-xs font-semibold uppercase tracking-wider border border-gray-200 cursor-pointer select-none transition-colors group ${
                         header === 'id' 
-                          ? 'text-gray-500 bg-[#0a1628] hover:bg-[#0d1f38]' 
+                          ? 'text-gray-500 bg-gray-100 hover:bg-gray-200' 
                           : isSorted 
-                            ? 'text-violet-300 bg-violet-900/30' 
-                            : 'text-gray-300 hover:bg-[#1a2540]'
+                            ? 'text-violet-700 bg-violet-50' 
+                            : 'text-gray-600 bg-gray-50 hover:bg-gray-100'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1">
@@ -1481,16 +1481,16 @@ export default function EditPage() {
                         <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
                           {isSorted ? (
                             sortDirection === 'asc' ? (
-                              <svg className="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-3.5 h-3.5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
                               </svg>
                             ) : (
-                              <svg className="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-3.5 h-3.5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                               </svg>
                             )
                           ) : (
-                            <svg className="w-3.5 h-3.5 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-3.5 h-3.5 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                             </svg>
                           )}
@@ -1501,13 +1501,13 @@ export default function EditPage() {
                 })}
                 {/* 컬럼 추가 버튼 - 항상 맨 오른쪽에 표시 */}
                 <th 
-                  className={`w-12 px-2 py-2 text-center border border-[#1a1a2e] bg-[#0f3460] sticky right-0 z-20 transition-all ${
+                  className={`w-12 px-2 py-3 text-center border border-gray-200 bg-gray-50 sticky right-0 z-20 transition-all ${
                     showAddColumnButton ? 'opacity-100' : 'opacity-50 hover:opacity-100'
                   }`}
                 >
                   <button
                     onClick={() => setShowAddColumnModal(true)}
-                    className="w-8 h-8 flex items-center justify-center bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors"
+                    className="w-8 h-8 flex items-center justify-center bg-violet-500 hover:bg-violet-600 text-white rounded-lg transition-colors shadow-sm"
                     title="새 컬럼 추가"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1529,16 +1529,16 @@ export default function EditPage() {
                 <tr
                   key={row.id}
                   className={`
-                    ${rowIndex % 2 === 0 ? 'bg-[#16213e]' : 'bg-[#1a1a2e]'}
-                    ${!isEmptyRow && row.alarm_status && row.base_stock !== null ? 'bg-red-500/20 border-l-2 border-l-red-500' : ''}
-                    ${!isEmptyRow && modifiedRows.has(row.id) && !row.alarm_status ? 'bg-orange-500/15 border-l-2 border-l-orange-500' : ''}
-                    ${isNewRow ? 'bg-emerald-500/15 border-l-2 border-l-emerald-500' : ''}
-                    ${isPureEmptyRow ? 'bg-[#12192e] hover:bg-[#1a2540]' : 'hover:bg-[#0f3460]/50'}
+                    ${rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                    ${!isEmptyRow && row.alarm_status && row.base_stock !== null ? 'bg-red-50 border-l-2 border-l-red-500' : ''}
+                    ${!isEmptyRow && modifiedRows.has(row.id) && !row.alarm_status ? 'bg-orange-50 border-l-2 border-l-orange-500' : ''}
+                    ${isNewRow ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''}
+                    ${isPureEmptyRow ? 'bg-gray-50/50 hover:bg-gray-100' : 'hover:bg-green-50'}
                     transition-colors
                   `}
                 >
                   {/* 액션 버튼 (빈 행에는 표시 안함) */}
-                  <td className="w-20 px-1 py-0 text-center border border-[#0f3460]/50 bg-inherit sticky left-0">
+                  <td className="w-20 px-1 py-0 text-center border border-gray-100 bg-inherit sticky left-0">
                     {!isEmptyRow && (
                       <div className="flex items-center justify-center gap-0.5">
                         {/* 최종 확정 버튼 */}
@@ -1546,10 +1546,10 @@ export default function EditPage() {
                           onClick={() => openConfirmModal(row)}
                           className={`p-1 rounded transition-colors ${
                             row.alarm_status 
-                              ? 'text-red-400 bg-red-500/20 animate-pulse hover:bg-red-500/30' 
+                              ? 'text-red-500 bg-red-100 hover:bg-red-200' 
                               : row.base_stock !== null && row.base_stock !== undefined
-                                ? 'text-green-400 hover:bg-green-500/20'
-                                : 'text-gray-500 hover:text-green-400 hover:bg-green-500/20'
+                                ? 'text-green-600 hover:bg-green-100'
+                                : 'text-gray-400 hover:text-green-600 hover:bg-green-100'
                           }`}
                           title={row.alarm_status 
                             ? `⚠️ 재고 부족! (기준재고: ${row.base_stock})` 
@@ -1578,7 +1578,7 @@ export default function EditPage() {
                         {/* 삭제 버튼 */}
                         <button
                           onClick={() => handleDeleteRow(row.id)}
-                          className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded transition-colors"
+                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-100 rounded transition-colors"
                           title="삭제"
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1599,8 +1599,8 @@ export default function EditPage() {
                         key={header}
                         style={{ width: getColumnWidth(header), minWidth: getColumnWidth(header) }}
                         className={`
-                          p-0 border border-[#0f3460]/50 text-sm
-                          ${isIdColumn ? 'text-gray-500 bg-[#0a1628]/50' : 'text-gray-200'}
+                          p-0 border border-gray-100 text-sm
+                          ${isIdColumn ? 'text-gray-500 bg-gray-50' : 'text-gray-700'}
                           ${isEditing ? 'p-0' : ''}
                           ${!isIdColumn && !isEditing ? 'cursor-pointer' : ''}
                           ${isEmptyRow && !isEditing ? 'opacity-50' : ''}
@@ -1610,7 +1610,7 @@ export default function EditPage() {
                           // ID 컬럼
                           <div className="px-2 py-1.5 text-center font-mono text-xs h-[30px]">
                             {isEmptyRow ? (
-                              <span className="text-gray-600 italic">new</span>
+                              <span className="text-gray-400 italic">new</span>
                             ) : (
                               row.id
                             )}
@@ -1635,7 +1635,7 @@ export default function EditPage() {
                     );
                   })}
                   {/* 컬럼 추가 버튼 자리 (빈 셀) */}
-                  <td className="w-12 border border-[#0f3460]/50 bg-inherit sticky right-0"></td>
+                  <td className="w-12 border border-gray-100 bg-inherit sticky right-0"></td>
                 </tr>
                 );
               })}
@@ -1645,30 +1645,30 @@ export default function EditPage() {
       </div>
 
       {/* Footer Help */}
-      <div className="fixed bottom-0 left-0 right-0 bg-[#16213e] border-t border-[#0f3460] px-4 py-2">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-2 shadow-lg">
         <div className="flex items-center justify-between text-xs text-gray-500">
           <div className="flex items-center gap-4">
-            <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Click</kbd> 셀 편집</span>
-            <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Enter</kbd> 로컬 저장</span>
-            <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Esc</kbd> 취소</span>
-            <span><kbd className="px-1.5 py-0.5 bg-[#0f3460] rounded text-gray-400">Tab</kbd> 다음 셀</span>
+            <span><kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">Click</kbd> 셀 편집</span>
+            <span><kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">Enter</kbd> 로컬 저장</span>
+            <span><kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">Esc</kbd> 취소</span>
+            <span><kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">Tab</kbd> 다음 셀</span>
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-              <span className="text-red-400">재고부족</span>
+              <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+              <span className="text-red-600">재고부족</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-              <span className="text-green-400">기준재고 확정</span>
+              <span className="text-green-600">기준재고 확정</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-              <span className="text-orange-400">수정됨</span>
+              <span className="text-orange-600">수정됨</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
-              <span className="text-emerald-400">새 행</span>
+              <span className="text-emerald-600">새 행</span>
             </span>
           </div>
         </div>

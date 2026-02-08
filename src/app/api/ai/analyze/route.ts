@@ -4,10 +4,13 @@ import { createServerSupabaseClient } from '@/lib/supabase';
 
 // OpenAI 클라이언트를 런타임에서 생성
 function getOpenAIClient(): OpenAI | null {
-  const apiKey = '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';
+  const apiKey = process.env.OPENAI_API_KEY;
+  
+  // 디버깅: 환경 변수 확인
+  console.log('[OpenAI] API Key loaded:', apiKey ? `${apiKey.substring(0, 10)}...${apiKey.substring(apiKey.length - 5)} (length: ${apiKey.length})` : 'NOT FOUND');
   
   if (!apiKey || apiKey.length < 20) {
-    console.error('OpenAI API key is missing or invalid');
+    console.error('[OpenAI] API key is missing or invalid. Please set OPENAI_API_KEY in .env.local');
     return null;
   }
   
@@ -18,6 +21,15 @@ interface AnalysisRequest {
   data: Array<Record<string, unknown>>;
   headers: string[];
   fileName: string;
+}
+
+interface LowStockItem {
+  id: number;
+  itemName: string;
+  currentStock: number;
+  baseStock: number;
+  shortage: number;
+  shortagePercent: number;
 }
 
 // POST: AI 재고 분석
@@ -33,214 +45,287 @@ export async function POST(request: Request) {
       });
     }
 
-    // DB에서 해당 파일의 알람 상태 조회 (base_stock 기준)
+    // DB에서 해당 파일의 모든 데이터 조회 (base_stock 포함)
     const supabase = createServerSupabaseClient();
-    const { data: alarmRows } = await supabase
+    const { data: allRows } = await supabase
       .from('재고')
       .select('id, data, base_stock, alarm_status')
-      .eq('file_name', fileName)
-      .eq('alarm_status', true);
+      .eq('file_name', fileName);
 
-    // 알람 상태인 품목들 (base_stock 기준으로 재고 부족인 것만)
-    const alarmItems = (alarmRows || []).map(row => {
+    // 재고 부족 품목 상세 분석
+    const lowStockItems: LowStockItem[] = [];
+    let totalShortage = 0;
+    let confirmedItemsCount = 0; // 기준 재고가 설정된 품목 수
+
+    // 품목명 컬럼 키 찾기
+    const nameKeys = ['품목', '품목명', '상품명', '제품명', '이름', 'name', 'item', 'product', '세목', '항목'];
+    const stockKeys = ['현재재고', '현재_재고', '재고', '재고량', '수량', 'stock', 'quantity', '잔량'];
+
+    (allRows || []).forEach(row => {
       const rowData = row.data as Record<string, unknown>;
+      if (!rowData) return;
+
       // 품목명 찾기
-      const nameKeys = ['품목', '품목명', '상품명', '제품명', '이름', 'name', 'item', 'product'];
-      let itemName = `행 ${row.id}`;
+      let itemName = `행 #${row.id}`;
       for (const key of Object.keys(rowData)) {
         if (nameKeys.some(nk => key.toLowerCase().includes(nk.toLowerCase()))) {
-          itemName = String(rowData[key]);
-          break;
+          const val = rowData[key];
+          if (val && String(val).trim()) {
+            itemName = String(val);
+            break;
+          }
         }
       }
+
       // 현재 재고 찾기
-      const stockKeys = ['현재재고', '재고', '수량', 'stock', 'quantity'];
       let currentStock = 0;
       for (const key of Object.keys(rowData)) {
-        if (stockKeys.some(sk => key.toLowerCase().replace(/\s/g, '').includes(sk.toLowerCase()))) {
+        const normalizedKey = key.toLowerCase().replace(/[\s_]/g, '');
+        if (stockKeys.some(sk => normalizedKey.includes(sk.toLowerCase().replace(/[\s_]/g, '')))) {
           currentStock = Number(rowData[key]) || 0;
           break;
         }
       }
-      return {
-        name: itemName,
-        value: currentStock,
-        baseStock: row.base_stock,
-      };
+
+      // 숫자 데이터가 있는 첫 번째 컬럼에서 현재 값 추출 (재고 컬럼이 없는 경우)
+      if (currentStock === 0) {
+        for (const key of Object.keys(rowData)) {
+          const val = rowData[key];
+          if (typeof val === 'number' && val > 0) {
+            currentStock = val;
+            break;
+          }
+        }
+      }
+
+      // 기준 재고가 설정된 품목인지 확인
+      if (row.base_stock !== null && row.base_stock !== undefined) {
+        confirmedItemsCount++;
+        
+        // 재고 부족 여부 확인
+        if (currentStock < row.base_stock) {
+          const shortage = row.base_stock - currentStock;
+          totalShortage += shortage;
+          
+          lowStockItems.push({
+            id: row.id,
+            itemName,
+            currentStock,
+            baseStock: row.base_stock,
+            shortage,
+            shortagePercent: row.base_stock > 0 ? Math.round((shortage / row.base_stock) * 100) : 0,
+          });
+        }
+      }
     });
 
-    // 숫자 컬럼 식별 및 통계 계산
-    const numericColumns: string[] = [];
-    const columnStats: Record<string, { 
-      min: number; 
-      max: number; 
-      avg: number; 
-      sum: number; 
-      count: number;
-      lowItems: Array<{ name: string; value: number }>;
-    }> = {};
+    // 부족 정도에 따라 정렬 (가장 부족한 순)
+    lowStockItems.sort((a, b) => b.shortagePercent - a.shortagePercent);
 
-    // 이름/품목 컬럼 찾기
-    const nameColumn = headers.find(h => 
-      ['이름', '품목', '품목명', '상품명', '제품명', '항목', 'name', 'item', 'product'].some(
-        keyword => h.toLowerCase().includes(keyword.toLowerCase())
-      )
-    ) || headers.find(h => h !== 'id') || 'id';
+    // 통계 계산
+    const totalItems = data.length;
+    const lowStockCount = lowStockItems.length;
+    const criticalItems = lowStockItems.filter(item => item.shortagePercent >= 50); // 50% 이상 부족
+    const warningItems = lowStockItems.filter(item => item.shortagePercent >= 20 && item.shortagePercent < 50);
 
-    // 숫자 컬럼 분석
+    // 숫자 컬럼 통계
+    const numericStats: Record<string, { min: number; max: number; avg: number; sum: number; count: number }> = {};
     headers.forEach(header => {
       if (header === 'id') return;
-      
       const values = data
         .map(row => row[header])
         .filter(v => v !== null && v !== undefined && !isNaN(Number(v)))
         .map(v => Number(v));
 
-      if (values.length > 0 && values.length >= data.length * 0.3) {
-        numericColumns.push(header);
-        
+      if (values.length > data.length * 0.3) {
         const sum = values.reduce((a, b) => a + b, 0);
-        const avg = sum / values.length;
-        const min = Math.min(...values);
-        const max = Math.max(...values);
-
-        // 재고 부족 품목: DB의 alarm_status가 true인 것만 사용 (base_stock 기준)
-        // alarmItems가 없으면 빈 배열
-        columnStats[header] = { 
-          min, 
-          max, 
-          avg, 
-          sum, 
-          count: values.length, 
-          lowItems: alarmItems.length > 0 ? alarmItems : [] 
+        numericStats[header] = {
+          min: Math.min(...values),
+          max: Math.max(...values),
+          avg: sum / values.length,
+          sum,
+          count: values.length,
         };
       }
     });
-    
-    // 첫 번째 숫자 컬럼에만 알람 품목 할당 (중복 방지)
-    if (numericColumns.length > 0 && alarmItems.length > 0) {
-      const firstNumericCol = numericColumns[0];
-      Object.keys(columnStats).forEach(col => {
-        if (col !== firstNumericCol) {
-          columnStats[col].lowItems = [];
-        }
-      });
-    }
-
-    // AI에게 전달할 데이터 요약
-    const dataSummary = {
-      fileName,
-      totalRows: data.length,
-      numericColumns: numericColumns.map(col => ({
-        name: col,
-        stats: columnStats[col],
-      })),
-      sampleData: data.slice(0, 5).map(row => {
-        const simplified: Record<string, unknown> = {};
-        headers.slice(0, 8).forEach(h => {
-          simplified[h] = row[h];
-        });
-        return simplified;
-      }),
-    };
 
     // OpenAI API 호출
     const openai = getOpenAIClient();
     
     if (!openai) {
-      // API 키가 없으면 기본 응답 반환
+      // API 키가 없으면 상세한 기본 분석 반환
+      const basicAnalysis = generateBasicAnalysis(fileName, totalItems, confirmedItemsCount, lowStockItems, totalShortage, criticalItems);
+      
       return NextResponse.json({
         success: true,
-        analysis: `사장님, ${fileName} 파일의 데이터 ${data.length}개 행을 확인했습니다. AI 분석을 위해서는 OpenAI API 키 설정이 필요합니다.`,
+        analysis: basicAnalysis,
         insights: {
-          totalRows: data.length,
-          numericColumnsCount: numericColumns.length,
-          lowStockAlerts: [],
-          columnStats,
+          totalRows: totalItems,
+          confirmedItems: confirmedItemsCount,
+          lowStockCount,
+          totalShortage,
+          criticalCount: criticalItems.length,
+          warningCount: warningItems.length,
+          lowStockItems: lowStockItems.slice(0, 10),
+          numericStats,
         },
         generatedAt: new Date().toISOString(),
       });
     }
-    
+
+    // AI 프롬프트 구성 - 상세하고 전문적인 분석 요청
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: `당신은 중소기업 사장님을 위한 AI 경영 비서입니다. 
-재고 데이터를 분석하고, 사장님께 친근하고 명확하게 브리핑해주세요.
+          content: `당신은 대기업 수준의 전문 재고관리 AI 컨설턴트입니다.
+사장님께 보고서 형식으로 정확하고 상세한 재고 분석을 제공합니다.
 
-규칙:
-1. 반드시 한국어로 답변하세요.
-2. "사장님," 으로 시작하는 대화체로 작성하세요.
-3. 재고가 부족한 품목, 발주가 필요한 항목, 전체적인 재고 상황을 알려주세요.
-4. 구체적인 숫자와 품목명을 언급하세요.
-5. 실행 가능한 조언을 1-2가지 제안하세요.
-6. 전체 답변은 200단어 이내로 간결하게 작성하세요.
-7. 긍정적이고 격려하는 톤을 유지하세요.`
+## 출력 형식 (반드시 준수)
+
+📊 **재고 현황 요약**
+- 총 품목 수, 기준 재고 설정 품목 수, 재고 부족 품목 수를 명시
+
+🚨 **긴급 발주 필요 품목** (가장 부족한 상위 5개)
+- 품목명: 현재 OO개 / 기준 OO개 (부족 OO개, OO% 부족)
+
+📦 **발주 권고 사항**
+- 총 발주 예상 수량: OO개
+- 우선순위별 발주 제안
+
+💡 **경영 인사이트**
+- 재고 운영 개선 제안 1-2가지
+
+## 규칙
+1. 반드시 한국어로, 격식체(~습니다, ~입니다)로 작성
+2. 수치는 정확하게, 계산 근거를 명확히
+3. 이모지를 적절히 활용하여 가독성 향상
+4. 전체 300단어 이내로 간결하게`
         },
         {
           role: 'user',
-          content: `다음 재고 데이터를 분석해서 경영 브리핑을 작성해주세요:
+          content: `다음 재고 데이터를 분석하여 전문적인 보고서를 작성해주세요:
 
-파일명: ${fileName}
-총 행 수: ${dataSummary.totalRows}개
+## 기본 정보
+- 파일명: ${fileName}
+- 총 품목 수: ${totalItems}개
+- 기준 재고 설정 품목: ${confirmedItemsCount}개
+- 재고 부족 품목: ${lowStockCount}개
+- 총 부족 수량: ${totalShortage.toLocaleString()}개
 
-숫자 컬럼 통계:
-${dataSummary.numericColumns.map(col => `
-[${col.name}]
-- 범위: ${col.stats.min.toLocaleString()} ~ ${col.stats.max.toLocaleString()}
-- 평균: ${col.stats.avg.toFixed(1)}
-- 합계: ${col.stats.sum.toLocaleString()}
-- 부족 품목 (${col.stats.lowItems.length}개): ${col.stats.lowItems.map(item => `${item.name}(${item.value})`).join(', ') || '없음'}
-`).join('\n')}
+## 재고 부족 품목 상세 (상위 10개)
+${lowStockItems.slice(0, 10).map((item, idx) => 
+`${idx + 1}. ${item.itemName}
+   - 현재: ${item.currentStock.toLocaleString()}개
+   - 기준: ${item.baseStock.toLocaleString()}개
+   - 부족: ${item.shortage.toLocaleString()}개 (${item.shortagePercent}% 부족)`
+).join('\n') || '없음'}
 
-샘플 데이터:
-${JSON.stringify(dataSummary.sampleData, null, 2)}`
+## 긴급도 분류
+- 🔴 위험 (50% 이상 부족): ${criticalItems.length}개 품목
+- 🟡 주의 (20~50% 부족): ${warningItems.length}개 품목
+- 🟢 정상: ${confirmedItemsCount - lowStockCount}개 품목
+
+## 숫자 컬럼 통계
+${Object.entries(numericStats).slice(0, 5).map(([col, stats]) => 
+`[${col}] 범위: ${stats.min.toLocaleString()} ~ ${stats.max.toLocaleString()}, 평균: ${stats.avg.toFixed(1)}, 합계: ${stats.sum.toLocaleString()}`
+).join('\n')}
+
+위 데이터를 바탕으로 사장님께 보고할 전문적인 재고 분석 리포트를 작성해주세요.`
         }
       ],
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.5,
+      max_tokens: 800,
     });
 
-    const aiResponse = completion.choices[0]?.message?.content || '분석 결과를 생성할 수 없습니다.';
-
-    // 추가 통계 정보
-    const insights = {
-      totalRows: data.length,
-      numericColumnsCount: numericColumns.length,
-      lowStockAlerts: Object.entries(columnStats)
-        .filter(([_, stats]) => stats.lowItems.length > 0)
-        .map(([column, stats]) => ({
-          column,
-          count: stats.lowItems.length,
-          items: stats.lowItems.slice(0, 5),
-        })),
-      columnStats,
-    };
+    const aiResponse = completion.choices[0]?.message?.content || generateBasicAnalysis(fileName, totalItems, confirmedItemsCount, lowStockItems, totalShortage, criticalItems);
 
     return NextResponse.json({
       success: true,
       analysis: aiResponse,
-      insights,
+      insights: {
+        totalRows: totalItems,
+        confirmedItems: confirmedItemsCount,
+        lowStockCount,
+        totalShortage,
+        criticalCount: criticalItems.length,
+        warningCount: warningItems.length,
+        lowStockItems: lowStockItems.slice(0, 10),
+        numericStats,
+      },
       generatedAt: new Date().toISOString(),
     });
 
   } catch (error) {
     console.error('AI Analysis error:', error);
     
-    // OpenAI API 키 문제 확인
+    // 기본 insights 응답 (에러 시에도 UI가 깨지지 않도록)
+    const defaultInsights = {
+      totalRows: 0,
+      confirmedItems: 0,
+      lowStockCount: 0,
+      totalShortage: 0,
+      criticalCount: 0,
+      warningCount: 0,
+      lowStockItems: [],
+      numericStats: {},
+    };
+    
     if (error instanceof Error && error.message.includes('API key')) {
       return NextResponse.json({
         success: false,
         error: 'OpenAI API 키가 설정되지 않았거나 유효하지 않습니다.',
+        insights: defaultInsights,
       }, { status: 401 });
     }
 
     return NextResponse.json({
       success: false,
       error: 'AI 분석 중 오류가 발생했습니다.',
+      insights: defaultInsights,
     }, { status: 500 });
   }
 }
 
+// API 키 없을 때 기본 분석 생성
+function generateBasicAnalysis(
+  fileName: string,
+  totalItems: number,
+  confirmedItems: number,
+  lowStockItems: LowStockItem[],
+  totalShortage: number,
+  criticalItems: LowStockItem[]
+): string {
+  const lowStockCount = lowStockItems.length;
+  
+  let analysis = `📊 **재고 현황 요약**\n\n`;
+  analysis += `${fileName} 파일의 재고 현황을 분석했습니다.\n\n`;
+  analysis += `• 총 품목 수: ${totalItems.toLocaleString()}개\n`;
+  analysis += `• 기준 재고 설정: ${confirmedItems}개 품목\n`;
+  
+  if (lowStockCount > 0) {
+    analysis += `• **재고 부족: ${lowStockCount}개 품목**\n\n`;
+    
+    analysis += `🚨 **긴급 발주 필요 품목**\n\n`;
+    lowStockItems.slice(0, 5).forEach((item, idx) => {
+      analysis += `${idx + 1}. **${item.itemName}**\n`;
+      analysis += `   현재 ${item.currentStock.toLocaleString()}개 / 기준 ${item.baseStock.toLocaleString()}개 (${item.shortage.toLocaleString()}개 부족, ${item.shortagePercent}%↓)\n\n`;
+    });
+    
+    analysis += `📦 **발주 권고 사항**\n\n`;
+    analysis += `• 총 발주 예상 수량: **${totalShortage.toLocaleString()}개**\n`;
+    analysis += `• 긴급 발주 필요: ${criticalItems.length}개 품목\n\n`;
+    
+    analysis += `💡 **권장 조치**\n`;
+    analysis += `재고 부족 품목에 대한 즉시 발주를 권장드립니다.`;
+  } else if (confirmedItems === 0) {
+    analysis += `\n⚠️ 기준 재고가 설정된 품목이 없습니다.\n`;
+    analysis += `'최종 확정' 버튼을 눌러 각 품목의 기준 재고를 설정해주세요.`;
+  } else {
+    analysis += `\n✅ **모든 품목의 재고가 정상 수준입니다.**\n`;
+    analysis += `현재 재고 관리가 잘 되고 있습니다.`;
+  }
+  
+  return analysis;
+}
