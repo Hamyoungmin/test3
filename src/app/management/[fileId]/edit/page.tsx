@@ -871,9 +871,16 @@ export default function EditPage() {
     }
   };
 
-  // 기준 재고 확정 저장
+  // 기준 재고 확정 저장 (개별)
   const handleConfirmBaseStock = async (rowId: number, baseStock: number) => {
     try {
+      // ✅ 먼저 로컬 상태를 즉시 업데이트 (UI가 바로 초록색으로 변경)
+      setData(prev => prev.map(row => 
+        row.id === rowId 
+          ? { ...row, base_stock: baseStock, alarm_status: false }
+          : row
+      ));
+      
       const response = await fetch('/api/inventory/check-alarm', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -883,22 +890,31 @@ export default function EditPage() {
       const result = await response.json();
 
       if (!result.success) {
+        // 실패 시 롤백
+        setData(prev => prev.map(row => 
+          row.id === rowId 
+            ? { ...row, base_stock: null, alarm_status: false }
+            : row
+        ));
         setMessage({ type: 'error', text: result.error || '기준 재고 확정 실패' });
         return;
       }
 
-      // 로컬 데이터 업데이트
+      // 서버 응답에 따라 알람 상태 갱신
       setData(prev => prev.map(row => 
         row.id === rowId 
-          ? { ...row, base_stock: baseStock, alarm_status: result.alarmStatus }
+          ? { ...row, base_stock: baseStock, alarm_status: result.alarmStatus ?? false }
           : row
       ));
 
       setMessage({ 
         type: 'success', 
-        text: `✅ 기준 재고가 ${baseStock}으로 확정되었습니다.`
+        text: `✅ 기준 재고가 ${baseStock.toLocaleString()}으로 확정되었습니다.`
       });
       setTimeout(() => setMessage(null), 3000);
+      
+      // AI 분석 재요청 트리거
+      setAiRefreshTrigger(prev => prev + 1);
 
     } catch (err) {
       console.error('Save base_stock error:', err);
@@ -973,6 +989,24 @@ export default function EditPage() {
   // 전체 최종 확정 - 모든 행의 현재 재고를 기준 재고로 설정
   const [isBulkConfirming, setIsBulkConfirming] = useState(false);
   
+  // 재고 컬럼에서 현재 재고 값 찾기 (헬퍼 함수)
+  const findCurrentStockValue = (row: RowData): number => {
+    const stockKeys = ['현재재고', '현재_재고', '재고', '재고량', '수량', 'stock', 'quantity'];
+    for (const key of stockKeys) {
+      const found = headers.find(h => h.toLowerCase().replace(/[\s_]/g, '').includes(key.toLowerCase().replace(/[\s_]/g, '')));
+      if (found && row[found] !== null && row[found] !== undefined) {
+        return Number(row[found]) || 0;
+      }
+    }
+    // 키워드 매칭 실패 시 첫 번째 숫자 컬럼 사용
+    for (const h of headers) {
+      if (h === 'id') continue;
+      const val = row[h];
+      if (typeof val === 'number' && val >= 0) return val;
+    }
+    return 0;
+  };
+  
   const handleBulkConfirm = async () => {
     // 확인 다이얼로그
     const confirmed = window.confirm(
@@ -1001,14 +1035,24 @@ export default function EditPage() {
         return;
       }
 
-      // DB에서 데이터 다시 불러오기 (base_stock 값 반영)
-      await fetchData();
+      // ✅ 즉시 로컬 상태 업데이트 (UI가 바로 반영되도록)
+      setData(prev => prev.map(row => {
+        const currentStock = findCurrentStockValue(row);
+        return {
+          ...row,
+          base_stock: currentStock,
+          alarm_status: false, // 확정 시점에서는 알람 없음
+        };
+      }));
 
       setMessage({ 
         type: 'success', 
         text: result.message || `✅ ${result.successCount}개 행이 최종 확정되었습니다.`
       });
       setTimeout(() => setMessage(null), 4000);
+      
+      // AI 분석 재요청 트리거
+      setAiRefreshTrigger(prev => prev + 1);
 
     } catch (err) {
       console.error('Bulk confirm error:', err);
@@ -1524,16 +1568,38 @@ export default function EditPage() {
                 const isEmptyRow = row.id < 0; // 빈 행 판별
                 const isNewRow = newRows.has(row.id); // 새로 추가된 행 (저장 대기)
                 const isPureEmptyRow = isEmptyRow && !isNewRow; // 순수 빈 행
+                const isConfirmed = !isEmptyRow && row.base_stock !== null && row.base_stock !== undefined; // 확정된 행
+                const hasAlarm = !isEmptyRow && row.alarm_status && isConfirmed; // 재고 부족 알람
+                const isModified = !isEmptyRow && modifiedRows.has(row.id) && !hasAlarm;
+                
+                // 행 배경색 결정 (우선순위: 알람 > 수정됨 > 새행 > 확정됨 > 기본)
+                let rowBgClass = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                let borderClass = '';
+                
+                if (hasAlarm) {
+                  rowBgClass = 'bg-red-50';
+                  borderClass = 'border-l-4 border-l-red-500';
+                } else if (isModified) {
+                  rowBgClass = 'bg-orange-50';
+                  borderClass = 'border-l-4 border-l-orange-400';
+                } else if (isNewRow) {
+                  rowBgClass = 'bg-emerald-50';
+                  borderClass = 'border-l-4 border-l-emerald-500';
+                } else if (isConfirmed) {
+                  // ✅ 확정된 행: 연한 초록색 배경 + 초록색 왼쪽 테두리
+                  rowBgClass = 'bg-green-50/70';
+                  borderClass = 'border-l-4 border-l-green-500';
+                } else if (isPureEmptyRow) {
+                  rowBgClass = 'bg-gray-50/50';
+                }
                 
                 return (
                 <tr
                   key={row.id}
                   className={`
-                    ${rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
-                    ${!isEmptyRow && row.alarm_status && row.base_stock !== null ? 'bg-red-50 border-l-2 border-l-red-500' : ''}
-                    ${!isEmptyRow && modifiedRows.has(row.id) && !row.alarm_status ? 'bg-orange-50 border-l-2 border-l-orange-500' : ''}
-                    ${isNewRow ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''}
-                    ${isPureEmptyRow ? 'bg-gray-50/50 hover:bg-gray-100' : 'hover:bg-green-50'}
+                    ${rowBgClass}
+                    ${borderClass}
+                    ${isPureEmptyRow ? 'hover:bg-gray-100' : 'hover:bg-green-100/50'}
                     transition-colors
                   `}
                 >
@@ -1544,34 +1610,34 @@ export default function EditPage() {
                         {/* 최종 확정 버튼 */}
                         <button
                           onClick={() => openConfirmModal(row)}
-                          className={`p-1 rounded transition-colors ${
-                            row.alarm_status 
-                              ? 'text-red-500 bg-red-100 hover:bg-red-200' 
-                              : row.base_stock !== null && row.base_stock !== undefined
-                                ? 'text-green-600 hover:bg-green-100'
-                                : 'text-gray-400 hover:text-green-600 hover:bg-green-100'
+                          className={`p-1.5 rounded-lg transition-all ${
+                            hasAlarm 
+                              ? 'text-white bg-red-500 hover:bg-red-600 shadow-sm' 
+                              : isConfirmed
+                                ? 'text-white bg-green-500 hover:bg-green-600 shadow-sm'
+                                : 'text-gray-400 bg-gray-100 hover:text-green-600 hover:bg-green-100'
                           }`}
-                          title={row.alarm_status 
-                            ? `⚠️ 재고 부족! (기준재고: ${row.base_stock})` 
-                            : row.base_stock !== null && row.base_stock !== undefined
-                              ? `✅ 기준재고: ${row.base_stock}`
-                              : '최종 확정 (클릭하여 기준재고 설정)'
+                          title={hasAlarm 
+                            ? `⚠️ 재고 부족! (기준재고: ${row.base_stock?.toLocaleString()})` 
+                            : isConfirmed
+                              ? `✅ 확정됨 (기준재고: ${row.base_stock?.toLocaleString()})`
+                              : '⭕ 미확정 - 클릭하여 기준재고 설정'
                           }
                         >
-                          {row.alarm_status ? (
+                          {hasAlarm ? (
                             // 재고 부족 시 경고 아이콘
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                             </svg>
-                          ) : row.base_stock !== null && row.base_stock !== undefined ? (
-                            // 확정 완료 시 체크 아이콘
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          ) : isConfirmed ? (
+                            // 확정 완료 시 체크 아이콘 (채워진 스타일)
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                              <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" />
                             </svg>
                           ) : (
-                            // 미확정 시 - 아이콘
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            // 미확정 시 - 빈 원 아이콘
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <circle cx="12" cy="12" r="9" strokeWidth={2} />
                             </svg>
                           )}
                         </button>

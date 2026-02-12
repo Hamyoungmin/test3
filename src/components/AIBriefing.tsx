@@ -1,6 +1,16 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+} from 'recharts';
+import * as XLSX from 'xlsx';
 
 interface AIBriefingProps {
   data: Array<Record<string, unknown>>;
@@ -49,6 +59,15 @@ const safeNumber = (value: number | undefined | null, defaultValue: number = 0):
 const formatNumber = (value: number | undefined | null, defaultValue: number = 0): string => {
   return safeNumber(value, defaultValue).toLocaleString();
 };
+
+// 재고 부족 TOP 5 차트용 파스텔 색상 (라이트 모드)
+const CHART_COLORS = [
+  '#F9A8D4', // 파스텔 핑크
+  '#93C5FD', // 파스텔 블루
+  '#A7F3D0', // 파스텔 민트
+  '#FDE047', // 파스텔 옐로우
+  '#C4B5FD', // 파스텔 라벤더
+];
 
 export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }: AIBriefingProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -121,6 +140,44 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
   const totalShortage = safeNumber(insights?.totalShortage, 0);
   const criticalCount = safeNumber(insights?.criticalCount, 0);
   const lowStockItems = insights?.lowStockItems ?? [];
+
+  // 부족분 발주서 엑셀 다운로드
+  const handleExportOrderExcel = useCallback(() => {
+    if (lowStockItems.length === 0) return;
+
+    // 전체 lowStockItems를 사용 (API가 이미 현재재고 < 기준재고 필터링 완료)
+    const rows = lowStockItems.map((item) => ({
+      '품목명': item.itemName || '',
+      '현재재고': safeNumber(item.currentStock),
+      '기준재고': safeNumber(item.baseStock),
+      '필요수량': safeNumber(item.shortage),
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    // 컬럼 너비 설정
+    ws['!cols'] = [
+      { wch: 24 }, // 품목명
+      { wch: 12 }, // 현재재고
+      { wch: 12 }, // 기준재고
+      { wch: 12 }, // 필요수량
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '발주 필요 목록');
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    XLSX.writeFile(wb, `발주필요목록_${today}.xlsx`);
+  }, [lowStockItems]);
+
+  // 재고 부족 TOP 5 차트 데이터 (품목명, 부족 수량)
+  const chartData = useMemo(() => {
+    return lowStockItems.slice(0, 5).map((item, idx) => ({
+      name: item?.itemName || `품목 #${idx + 1}`,
+      shortage: safeNumber(item?.shortage, 0),
+      fill: CHART_COLORS[idx % CHART_COLORS.length],
+    }));
+  }, [lowStockItems]);
 
   return (
     <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl border border-violet-200 shadow-sm overflow-hidden">
@@ -294,6 +351,60 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                 </div>
               )}
 
+              {/* 재고 부족 품목 TOP 5 가로 막대 차트 */}
+              {chartData.length > 0 && (
+                <div className="p-5 bg-white border border-violet-200 rounded-xl shadow-sm">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    <span className="text-base">📊</span>
+                    재고 부족 품목 TOP 5
+                  </h3>
+                  <div className="h-[220px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        layout="vertical"
+                        data={chartData}
+                        margin={{ top: 0, right: 24, left: 0, bottom: 0 }}
+                      >
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 11, fill: '#6B7280' }}
+                          tickFormatter={(v) => formatNumber(v)}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={120}
+                          tick={{ fontSize: 12, fill: '#4B5563' }}
+                          tickFormatter={(v) => (v.length > 12 ? `${v.slice(0, 12)}…` : v)}
+                        />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload?.length) return null;
+                            const d = payload[0].payload;
+                            return (
+                              <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm">
+                                <p className="font-medium text-gray-900 truncate max-w-[200px]" title={d.name}>
+                                  {d.name}
+                                </p>
+                                <p className="text-violet-600 font-semibold mt-0.5">
+                                  부족 수량: <span className="font-mono">{formatNumber(d.shortage)}</span>개
+                                </p>
+                              </div>
+                            );
+                          }}
+                          cursor={{ fill: 'rgba(139, 92, 246, 0.08)' }}
+                        />
+                        <Bar dataKey="shortage" radius={[0, 6, 6, 0]} barSize={28} isAnimationActive>
+                          {chartData.map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
               {/* 재고 부족 품목 상세 테이블 */}
               {lowStockItems.length > 0 && (
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -366,27 +477,44 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                 </div>
               )}
 
-              {/* 통계 요약 Footer */}
+              {/* 통계 요약 Footer + 발주서 다운로드 */}
               {insights && (
-                <div className="flex flex-wrap items-center gap-4 pt-3 border-t border-violet-200 text-xs text-gray-600">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                    총 {formatNumber(totalRows)}개 품목
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                    {formatNumber(confirmedItems)}개 기준 설정
-                  </span>
-                  {lowStockCount > 0 && (
+                <div className="pt-3 border-t border-violet-200 space-y-3">
+                  <div className="flex flex-wrap items-center gap-4 text-xs text-gray-600">
                     <span className="flex items-center gap-1">
-                      <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                      {formatNumber(lowStockCount)}개 부족
+                      <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                      총 {formatNumber(totalRows)}개 품목
                     </span>
-                  )}
-                  {result.generatedAt && (
-                    <span className="ml-auto text-gray-400">
-                      {new Date(result.generatedAt).toLocaleString()}
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                      {formatNumber(confirmedItems)}개 기준 설정
                     </span>
+                    {lowStockCount > 0 && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                        {formatNumber(lowStockCount)}개 부족
+                      </span>
+                    )}
+                    {result.generatedAt && (
+                      <span className="ml-auto text-gray-400">
+                        {new Date(result.generatedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 발주서 엑셀 다운로드 버튼 */}
+                  {lowStockItems.length > 0 && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={handleExportOrderExcel}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-medium rounded-xl transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        부족분 발주서 다운로드 (Excel)
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
