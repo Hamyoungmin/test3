@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Package, AlertTriangle, CheckCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useDragScroll } from '@/hooks/useDragScroll';
 import AIBriefing from '@/components/AIBriefing';
@@ -22,6 +23,30 @@ interface EditingCell {
 
 // 숫자 전용 컬럼 목록
 const NUMERIC_COLUMNS = ['현재_재고', '현재재고', '재고', '단가', '가격', 'price', 'quantity', 'stock', '수량', '금액'];
+
+// 재고 컬럼 키워드 (현재 재고 추출용)
+const STOCK_KEYWORDS = ['현재_재고', '현재재고', '재고', '재고량', '수량', 'stock', 'quantity', '잔량'];
+
+function getCurrentStockFromRow(row: RowData, headers: string[]): number | null {
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const lower = h.toLowerCase().replace(/[\s_]/g, '');
+    if (STOCK_KEYWORDS.some(sk => lower.includes(sk.toLowerCase().replace(/[\s_]/g, '')))) {
+      const val = row[h];
+      if (typeof val === 'number' && !isNaN(val) && val >= 0) return val;
+      if (typeof val === 'string') {
+        const num = parseFloat(val.replace(/,/g, ''));
+        if (!isNaN(num) && num >= 0) return num;
+      }
+    }
+  }
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const val = row[h];
+    if (typeof val === 'number' && !isNaN(val) && val >= 0) return val;
+  }
+  return null;
+}
 
 // 숫자 전용 컬럼인지 확인
 function isNumericColumn(column: string): boolean {
@@ -515,6 +540,19 @@ export default function EditPage() {
     });
     return [...sortedData, ...mergedEmptyRows];
   }, [sortedData, emptyRows, newRows]);
+
+  // 요약 대시보드 통계 (테이블 데이터 변경 시 실시간 반영)
+  const summaryStats = useMemo(() => {
+    const total = data.length;
+    const confirmed = data.filter(row => row.base_stock != null && row.base_stock !== undefined).length;
+    const lowStock = data.filter(row => {
+      const base = row.base_stock;
+      if (base == null || base === undefined) return false;
+      const cur = getCurrentStockFromRow(row, headers);
+      return cur !== null && cur < base;
+    }).length;
+    return { total, confirmed, lowStock };
+  }, [data, headers]);
 
   // 스크롤 감지: 세로 바닥 → 빈 행 추가, 가로 끝 → 컬럼 추가 버튼 표시
   useEffect(() => {
@@ -1470,6 +1508,44 @@ export default function EditPage() {
           </div>
         </div>
       </div>
+
+      {/* 요약 대시보드 */}
+      {data.length > 0 && headers.length > 0 && (
+        <div className="px-4 py-3 bg-white border-b border-[#E5E7EB]">
+          <div className="grid grid-cols-3 gap-4">
+            {/* 전체 품목 */}
+            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                <Package className="w-5 h-5 text-gray-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">전체 품목</p>
+                <p className="text-xl font-bold text-gray-900">{summaryStats.total.toLocaleString()}</p>
+              </div>
+            </div>
+            {/* 재고 부족 */}
+            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">재고 부족</p>
+                <p className="text-xl font-bold text-red-600">{summaryStats.lowStock.toLocaleString()}</p>
+              </div>
+            </div>
+            {/* 최종 확정 */}
+            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">최종 확정</p>
+                <p className="text-xl font-bold text-green-600">{summaryStats.confirmed.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grid Editor - LTR 정렬 + 드래그 스크롤 */}
       <div 

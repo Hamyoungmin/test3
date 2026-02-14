@@ -694,6 +694,10 @@ export default function HomeScreen() {
   const lowStockList = inventory.filter(item => item.isLowStock);
   const expiringItems = inventory.filter(item => item.isExpiringSoon || item.isExpired).length;
 
+  // 모바일 대시보드용 핵심 지표
+  const unconfirmedCount = inventory.filter(item => !item.base_stock || item.base_stock === 0).length;
+  const confirmedCount = inventory.filter(item => item.base_stock !== null && item.base_stock > 0).length;
+
   // 발주 목록 공유
   const shareOrderList = async () => {
     if (lowStockList.length === 0) {
@@ -892,7 +896,7 @@ ${orderItems}
           </Text>
         </View>
         <View style={styles.headerButtons}>
-          {/* 알림 테스트 버튼 */}
+          {/* 알림 센터 (재고 부족 시 빨간 점 배지) */}
           <TouchableOpacity 
             onPress={() => {
               if (lowStockItems > 0) {
@@ -907,9 +911,14 @@ ${orderItems}
                 );
               }
             }}
-            style={styles.notificationButton}
+            style={styles.alarmCenterButton}
           >
-            <Ionicons name="notifications" size={22} color="#166534" />
+            <Ionicons name="notifications-outline" size={26} color="#374151" />
+            {lowStockItems > 0 && (
+              <View style={styles.alarmCenterBadge}>
+                <View style={styles.alarmCenterBadgeDot} />
+              </View>
+            )}
           </TouchableOpacity>
           {/* 새로고침 버튼 */}
           <TouchableOpacity 
@@ -925,6 +934,81 @@ ${orderItems}
               />
             </Animated.View>
           </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* 모바일 전용 재고 현황 대시보드 (2x2 그리드) */}
+      <View style={styles.dashboardSection}>
+        <Text style={styles.dashboardSectionTitle}>재고 현황 대시보드</Text>
+        <View style={styles.dashboardGrid}>
+          <View style={styles.dashboardGridRow}>
+            {/* 미확정 품목 */}
+            <View style={styles.dashboardCard}>
+              <Ionicons name="ellipse-outline" size={28} color="#6B7280" />
+              <View style={styles.dashboardCardContent}>
+                <Text style={styles.dashboardCardNumber}>{unconfirmedCount}</Text>
+                <Text style={styles.dashboardCardLabel}>미확정 품목</Text>
+              </View>
+            </View>
+            {/* 재고 위험 */}
+            <View style={[styles.dashboardCard, lowStockItems > 0 && styles.dashboardCardAlert]}>
+              <Ionicons 
+                name="warning" 
+                size={28} 
+                color={lowStockItems > 0 ? "#DC2626" : "#9CA3AF"} 
+              />
+              <View style={styles.dashboardCardContent}>
+                <View style={styles.dashboardCardNumberRow}>
+                  <Text style={[
+                    styles.dashboardCardNumber, 
+                    lowStockItems > 0 && styles.dashboardCardNumberAlert
+                  ]}>
+                    {lowStockItems}
+                  </Text>
+                  {lowStockItems > 0 && (
+                    <View style={styles.supplyNeededBadge}>
+                      <Text style={styles.supplyNeededBadgeText}>보충 필요</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.dashboardCardLabel}>재고 위험</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.dashboardGridRow}>
+            {/* 최종 확정 (오늘 완료) */}
+            <View style={styles.dashboardCard}>
+              <Ionicons name="checkmark-circle" size={28} color="#16A34A" />
+              <View style={styles.dashboardCardContent}>
+                <Text style={[styles.dashboardCardNumber, { color: '#16A34A' }]}>{confirmedCount}</Text>
+                <Text style={styles.dashboardCardLabel}>최종 확정</Text>
+              </View>
+            </View>
+            {/* 유통기한 임박 */}
+            <View style={[styles.dashboardCard, expiringItems > 0 && styles.dashboardCardExpiring]}>
+              <Ionicons 
+                name="time" 
+                size={28} 
+                color={expiringItems > 0 ? "#D97706" : "#9CA3AF"} 
+              />
+              <View style={styles.dashboardCardContent}>
+                <View style={styles.dashboardCardNumberRow}>
+                  <Text style={[
+                    styles.dashboardCardNumber, 
+                    expiringItems > 0 && { color: '#D97706' }
+                  ]}>
+                    {expiringItems}
+                  </Text>
+                  {expiringItems > 0 && (
+                    <View style={styles.supplyNeededBadge}>
+                      <Text style={styles.supplyNeededBadgeText}>보충 필요</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.dashboardCardLabel}>유통기한 임박</Text>
+              </View>
+            </View>
+          </View>
         </View>
       </View>
 
@@ -967,29 +1051,6 @@ ${orderItems}
           </Text>
         </View>
       )}
-
-      {/* 통계 카드 */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Ionicons name="cube-outline" size={26} color="#166534" />
-          <Text style={styles.statNumber}>{totalItems}</Text>
-          <Text style={styles.statLabel}>전체 품목</Text>
-        </View>
-        <View style={[styles.statCard, lowStockItems > 0 && styles.alertStatCard]}>
-          <Ionicons 
-            name="warning-outline" 
-            size={26} 
-            color={lowStockItems > 0 ? "#DC2626" : "#9CA3AF"} 
-          />
-          <Text style={[
-            styles.statNumber, 
-            lowStockItems > 0 && styles.alertStatNumber
-          ]}>
-            {lowStockItems}
-          </Text>
-          <Text style={styles.statLabel}>재고 부족</Text>
-        </View>
-      </View>
 
       {/* 발주 목록 공유 버튼 */}
       {lowStockItems > 0 && (
@@ -1222,6 +1283,23 @@ ${orderItems}
                 {selectedFileGroup?.totalItems}개 품목
               </Text>
             </View>
+            {/* 알림 센터 (재고 부족 시 빨간 점) */}
+            <TouchableOpacity 
+              style={styles.detailAlarmCenterButton}
+              onPress={() => {
+                if ((selectedFileGroup?.lowStockCount ?? 0) > 0) {
+                  sendLocalNotification(
+                    '⚠️ 재고 부족 알림',
+                    `${selectedFileGroup?.lowStockCount}개 품목의 재고가 부족합니다!`
+                  );
+                }
+              }}
+            >
+              <Ionicons name="notifications-outline" size={22} color="#374151" />
+              {(selectedFileGroup?.lowStockCount ?? 0) > 0 && (
+                <View style={styles.detailAlarmBadge} />
+              )}
+            </TouchableOpacity>
             {/* 새로고침 버튼 */}
             <TouchableOpacity 
               style={styles.detailRefreshButton}
@@ -1286,6 +1364,61 @@ ${orderItems}
               <Text style={styles.detailDeleteButtonText}>삭제</Text>
             </TouchableOpacity>
           </View>
+
+          {/* 상세 모달 - 가로 스크롤 대시보드 */}
+          {selectedFileGroup && (
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.detailDashboardScroll}
+              contentContainerStyle={styles.detailDashboardScrollContent}
+            >
+              <View style={styles.detailDashboardCard}>
+                <Text style={styles.detailDashboardNumber}>
+                  {selectedFileGroup.items.filter(i => !i.base_stock || i.base_stock === 0).length}
+                </Text>
+                <Text style={styles.detailDashboardLabel}>미확정</Text>
+              </View>
+              <View style={[styles.detailDashboardCard, selectedFileGroup.lowStockCount > 0 && styles.detailDashboardCardAlert]}>
+                <View style={styles.detailDashboardNumberRow}>
+                  <Text style={[
+                    styles.detailDashboardNumber, 
+                    selectedFileGroup.lowStockCount > 0 && styles.detailDashboardNumberAlert
+                  ]}>
+                    {selectedFileGroup.lowStockCount}
+                  </Text>
+                  {selectedFileGroup.lowStockCount > 0 && (
+                    <View style={styles.detailSupplyBadge}>
+                      <Text style={styles.detailSupplyBadgeText}>보충 필요</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.detailDashboardLabel}>재고 위험</Text>
+              </View>
+              <View style={styles.detailDashboardCard}>
+                <Text style={[styles.detailDashboardNumber, { color: '#16A34A' }]}>
+                  {selectedFileGroup.items.filter(i => i.base_stock !== null && i.base_stock > 0).length}
+                </Text>
+                <Text style={styles.detailDashboardLabel}>최종 확정</Text>
+              </View>
+              <View style={[styles.detailDashboardCard, selectedFileGroup.expiringCount > 0 && styles.detailDashboardCardExpiring]}>
+                <View style={styles.detailDashboardNumberRow}>
+                  <Text style={[
+                    styles.detailDashboardNumber, 
+                    selectedFileGroup.expiringCount > 0 && { color: '#D97706' }
+                  ]}>
+                    {selectedFileGroup.expiringCount}
+                  </Text>
+                  {selectedFileGroup.expiringCount > 0 && (
+                    <View style={styles.detailSupplyBadge}>
+                      <Text style={styles.detailSupplyBadgeText}>보충 필요</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.detailDashboardLabel}>유통기한 임박</Text>
+              </View>
+            </ScrollView>
+          )}
 
           {/* 상세 모달 검색창 */}
           <View style={styles.detailSearchContainer}>
@@ -1649,6 +1782,113 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#BBF7D0',
   },
+  alarmCenterButton: {
+    padding: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    position: 'relative',
+  },
+  alarmCenterBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+  },
+  alarmCenterBadgeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+  // 모바일 전용 재고 현황 대시보드
+  dashboardSection: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  dashboardSectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111111',
+    marginBottom: 16,
+  },
+  dashboardGrid: {
+    gap: 12,
+  },
+  dashboardGridRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  dashboardCard: {
+    flex: 1,
+    minHeight: 110,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  dashboardCardAlert: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  dashboardCardExpiring: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  dashboardCardContent: {
+    flex: 1,
+  },
+  dashboardCardNumber: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#111111',
+    letterSpacing: -0.5,
+  },
+  dashboardCardNumberAlert: {
+    color: '#DC2626',
+  },
+  dashboardCardNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  dashboardCardLabel: {
+    fontSize: 16,
+    color: '#6B7280',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  supplyNeededBadge: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  supplyNeededBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   headerTitle: {
     fontSize: 26,
     fontWeight: '800',
@@ -1965,6 +2205,79 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#BBF7D0',
+  },
+  detailAlarmCenterButton: {
+    padding: 8,
+    marginRight: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    position: 'relative',
+  },
+  detailAlarmBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#DC2626',
+  },
+  // 상세 모달 가로 스크롤 대시보드
+  detailDashboardScroll: {
+    maxHeight: 90,
+  },
+  detailDashboardScrollContent: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  detailDashboardCard: {
+    minWidth: 100,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  detailDashboardCardAlert: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  detailDashboardCardExpiring: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  detailDashboardNumber: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#111111',
+  },
+  detailDashboardNumberAlert: {
+    color: '#DC2626',
+  },
+  detailDashboardNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  detailDashboardLabel: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  detailSupplyBadge: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  detailSupplyBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   // 상세 모달 액션 바
   detailActionBar: {
