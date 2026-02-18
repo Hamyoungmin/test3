@@ -19,8 +19,8 @@ export default function SheetTabs({ sheets, activeSheet, onSelect }: SheetTabsPr
             px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200
             ${
               activeSheet === sheet
-                ? 'bg-green-700 text-white shadow-md'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                ? 'bg-green-700 dark:bg-green-600 text-white shadow-md'
+                : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600'
             }
           `}
         >

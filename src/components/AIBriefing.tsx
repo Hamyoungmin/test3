@@ -17,6 +17,7 @@ interface AIBriefingProps {
   headers: string[];
   fileName: string;
   onRefreshTrigger?: number;
+  totalOrderBudget?: number;
 }
 
 interface LowStockItem {
@@ -69,7 +70,7 @@ const CHART_COLORS = [
   '#C4B5FD', // 파스텔 라벤더
 ];
 
-export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }: AIBriefingProps) {
+export default function AIBriefing({ data, headers, fileName, onRefreshTrigger, totalOrderBudget = 0 }: AIBriefingProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -90,7 +91,7 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          data: data.slice(0, 500),
+          data,
           headers,
           fileName,
         }),
@@ -170,20 +171,20 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
     XLSX.writeFile(wb, `발주필요목록_${today}.xlsx`);
   }, [lowStockItems]);
 
-  // 재고 부족 TOP 5 차트 데이터 (품목명, 부족 수량)
+  // 재고 부족 TOP 5 차트 데이터 (품목명, 부족 수량) - name은 항상 string 보장
   const chartData = useMemo(() => {
     return lowStockItems.slice(0, 5).map((item, idx) => ({
-      name: item?.itemName || `품목 #${idx + 1}`,
+      name: String(item?.itemName ?? `품목 #${idx + 1}`),
       shortage: safeNumber(item?.shortage, 0),
       fill: CHART_COLORS[idx % CHART_COLORS.length],
     }));
   }, [lowStockItems]);
 
   return (
-    <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl border border-violet-200 shadow-sm overflow-hidden">
+    <div className="bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-950/40 dark:to-purple-900/30 rounded-2xl border border-violet-200 dark:border-violet-800 shadow-sm overflow-hidden">
       {/* Header */}
       <div 
-        className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-violet-100/50 transition-colors"
+        className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-violet-100/50 dark:hover:bg-violet-900/30 transition-colors"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         <div className="flex items-center gap-3">
@@ -193,7 +194,7 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
             </svg>
           </div>
           <div>
-            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
               AI 경영 브리핑
               {isAnalyzing && (
                 <span className="flex items-center gap-1 text-xs text-violet-600 font-normal">
@@ -205,7 +206,7 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                 </span>
               )}
             </h2>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
               {lastAnalyzedAt 
                 ? `마지막 분석: ${lastAnalyzedAt.toLocaleTimeString()}`
                 : 'AI가 재고 데이터를 분석합니다'
@@ -215,19 +216,20 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
         </div>
 
         <div className="flex items-center gap-2">
-          {/* 새로고침 버튼 */}
+          {/* 분석하기 / 새로고침 버튼 */}
           <button
             onClick={(e) => {
               e.stopPropagation();
               analyzeData();
             }}
             disabled={isAnalyzing}
-            className="p-2 bg-violet-100 hover:bg-violet-200 text-violet-600 hover:text-violet-700 rounded-lg transition-all disabled:opacity-50"
-            title="다시 분석"
+            className="flex items-center gap-2 px-3 py-2 bg-violet-100 dark:bg-violet-900/50 hover:bg-violet-200 dark:hover:bg-violet-800/60 text-violet-600 dark:text-violet-300 hover:text-violet-700 dark:hover:text-violet-200 rounded-lg transition-all disabled:opacity-50"
+            title={result ? '다시 분석' : '분석하기'}
           >
             <svg className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
+            <span className="text-xs font-medium">{result ? '다시 분석' : '분석하기'}</span>
           </button>
 
           {/* 접기/펼치기 */}
@@ -245,21 +247,27 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
       {/* Content */}
       {!isCollapsed && (
         <div className="px-5 pb-5">
-          {/* Loading State */}
+          {/* Loading State - 분석 결과 박스 내부 Skeleton UI */}
           {isAnalyzing && !result && (
-            <div className="flex flex-col items-center justify-center py-8">
-              <div className="relative">
-                <div className="w-16 h-16 border-4 border-violet-200 rounded-full" />
-                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
+            <div className="p-5 bg-white dark:bg-slate-800 border border-violet-200 dark:border-violet-800 rounded-xl shadow-sm transition-opacity duration-300">
+              <p className="text-xs text-violet-600 mb-4">AI가 재고 데이터를 정밀 분석 중입니다...</p>
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-gray-200 rounded-full flex-shrink-0 animate-skeleton-pulse" />
+                <div className="flex-1 min-w-0 space-y-3">
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-full" style={{ animationDelay: '0s' }} />
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-[95%]" style={{ animationDelay: '0.15s' }} />
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-[88%]" style={{ animationDelay: '0.3s' }} />
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-[92%]" style={{ animationDelay: '0.45s' }} />
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-[78%]" style={{ animationDelay: '0.6s' }} />
+                  <div className="h-3 bg-gray-200 rounded animate-skeleton-pulse w-[85%]" style={{ animationDelay: '0.75s' }} />
+                </div>
               </div>
-              <p className="mt-4 text-gray-600 text-sm">AI가 데이터를 분석하고 있습니다...</p>
-              <p className="text-xs text-gray-500 mt-1">잠시만 기다려주세요</p>
             </div>
           )}
 
           {/* Error State */}
           {result && !result.success && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl">
               <div className="flex items-start gap-3">
                 <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -274,9 +282,9 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
             </div>
           )}
 
-          {/* Success State */}
+          {/* Success State - 로딩→결과 전환 시 부드럽게 표시 */}
           {result?.success && (
-            <div className="space-y-4">
+            <div className="space-y-4 animate-fade-in">
               {/* 상단 요약 카드 */}
               {insights && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -336,14 +344,14 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
 
               {/* AI 브리핑 메시지 */}
               {result.analysis && (
-                <div className="p-5 bg-white border border-violet-200 rounded-xl shadow-sm">
+                <div className="p-5 bg-white dark:bg-slate-800/80 border border-violet-200 dark:border-violet-800 rounded-xl shadow-sm">
                   <div className="flex items-start gap-4">
                     <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
                       <span className="text-lg">🤖</span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <div 
-                        className="text-gray-800 leading-relaxed whitespace-pre-wrap text-sm"
+                        className="text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap text-sm"
                         dangerouslySetInnerHTML={{ __html: formatAnalysisText(result.analysis) }}
                       />
                     </div>
@@ -353,8 +361,8 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
 
               {/* 재고 부족 품목 TOP 5 가로 막대 차트 */}
               {chartData.length > 0 && (
-                <div className="p-5 bg-white border border-violet-200 rounded-xl shadow-sm">
-                  <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <div className="p-5 bg-white dark:bg-slate-800/80 border border-violet-200 dark:border-violet-800 rounded-xl shadow-sm">
+                  <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2">
                     <span className="text-base">📊</span>
                     재고 부족 품목 TOP 5
                   </h3>
@@ -375,15 +383,15 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                           dataKey="name"
                           width={120}
                           tick={{ fontSize: 12, fill: '#4B5563' }}
-                          tickFormatter={(v) => (v.length > 12 ? `${v.slice(0, 12)}…` : v)}
+                          tickFormatter={(v) => (v && typeof v === 'string' && v.length > 12 ? `${v.slice(0, 12)}…` : String(v ?? ''))}
                         />
                         <Tooltip
                           content={({ active, payload }) => {
                             if (!active || !payload?.length) return null;
                             const d = payload[0].payload;
                             return (
-                              <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm">
-                                <p className="font-medium text-gray-900 truncate max-w-[200px]" title={d.name}>
+                              <div className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg px-3 py-2 text-sm">
+                                <p className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]" title={d.name}>
                                   {d.name}
                                 </p>
                                 <p className="text-violet-600 font-semibold mt-0.5">
@@ -407,24 +415,24 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
 
               {/* 재고 부족 품목 상세 테이블 */}
               {lowStockItems.length > 0 && (
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-gradient-to-r from-red-50 to-orange-50 border-b border-gray-200">
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 overflow-hidden">
+                  <div className="px-4 py-3 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/30 dark:to-orange-900/20 border-b border-gray-200 dark:border-slate-600">
                     <div className="flex items-center gap-2">
                       <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                       </svg>
-                      <span className="font-semibold text-gray-900">재고 부족 품목 ({formatNumber(lowStockCount)}개)</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">재고 부족 품목 ({formatNumber(lowStockCount)}개)</span>
                     </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-b border-gray-200">
+                      <thead className="bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-600">
                         <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">품목명</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">현재</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">기준</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">부족</th>
-                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">품목명</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">현재</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">기준</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">부족</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">상태</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -435,8 +443,8 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                           const itemShortagePercent = safeNumber(item?.shortagePercent);
                           
                           return (
-                            <tr key={item?.id ?? idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <td className="px-4 py-3 text-gray-900 font-medium truncate max-w-[200px]">
+                            <tr key={item?.id ?? idx} className={idx % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-gray-50 dark:bg-slate-800/80'}>
+                              <td className="px-4 py-3 text-gray-900 dark:text-gray-100 font-medium truncate max-w-[200px]">
                                 {item?.itemName || `품목 #${idx + 1}`}
                               </td>
                               <td className="px-4 py-3 text-right text-gray-700 font-mono">
@@ -470,7 +478,7 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                     </table>
                   </div>
                   {lowStockItems.length > 10 && (
-                    <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 text-center text-xs text-gray-500">
+                    <div className="px-4 py-2 bg-gray-50 dark:bg-slate-800 border-t border-gray-200 dark:border-slate-600 text-center text-xs text-gray-500 dark:text-gray-400">
                       +{lowStockItems.length - 10}개 더 있음
                     </div>
                   )}
@@ -502,9 +510,18 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                     )}
                   </div>
 
+                  {/* 총 발주 예산 강조 */}
+                  {totalOrderBudget > 0 && (
+                    <div className="mt-3 p-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-xl">
+                      <p className="text-base font-bold text-amber-800 dark:text-amber-200">
+                        이번 차수 총 발주 예산은 약 <span className="text-xl">₩{totalOrderBudget.toLocaleString()}</span>원입니다
+                      </p>
+                    </div>
+                  )}
+
                   {/* 발주서 엑셀 다운로드 버튼 */}
                   {lowStockItems.length > 0 && (
-                    <div className="flex justify-end">
+                    <div className="flex justify-end mt-3">
                       <button
                         onClick={handleExportOrderExcel}
                         className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-medium rounded-xl transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
@@ -529,7 +546,7 @@ export default function AIBriefing({ data, headers, fileName, onRefreshTrigger }
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
               </div>
-              <p className="text-gray-600">분석할 데이터가 없습니다</p>
+              <p className="text-gray-600 dark:text-gray-400">분석할 데이터가 없습니다</p>
               <p className="text-gray-500 text-xs mt-1">데이터를 추가하면 AI가 자동으로 분석합니다</p>
             </div>
           )}

@@ -6,9 +6,6 @@ import { createServerSupabaseClient } from '@/lib/supabase';
 function getOpenAIClient(): OpenAI | null {
   const apiKey = process.env.OPENAI_API_KEY;
   
-  // 디버깅: 환경 변수 확인
-  console.log('[OpenAI] API Key loaded:', apiKey ? `${apiKey.substring(0, 10)}...${apiKey.substring(apiKey.length - 5)} (length: ${apiKey.length})` : 'NOT FOUND');
-  
   if (!apiKey || apiKey.length < 20) {
     console.error('[OpenAI] API key is missing or invalid. Please set OPENAI_API_KEY in .env.local');
     return null;
@@ -122,8 +119,8 @@ export async function POST(request: Request) {
     // 부족 정도에 따라 정렬 (가장 부족한 순)
     lowStockItems.sort((a, b) => b.shortagePercent - a.shortagePercent);
 
-    // 통계 계산
-    const totalItems = data.length;
+    // 통계 계산: DB 기준으로 totalItems 사용 (클라이언트와 일치 보장)
+    const totalItems = Math.max(data?.length ?? 0, (allRows || []).length);
     const lowStockCount = lowStockItems.length;
     const criticalItems = lowStockItems.filter(item => item.shortagePercent >= 50); // 50% 이상 부족
     const warningItems = lowStockItems.filter(item => item.shortagePercent >= 20 && item.shortagePercent < 50);

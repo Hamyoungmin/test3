@@ -211,15 +211,15 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0) + 80; // +80 for row number column
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+    <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 overflow-hidden shadow-sm">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-900/50">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-white">
               {sheetName}
             </h3>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
               총 {filteredAndSortedData.length.toLocaleString()}개의 행 
               <span className="ml-2 text-green-600 font-medium">(무한 스크롤)</span>
             </p>
@@ -246,7 +246,7 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                 placeholder="검색..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9 pr-4 py-1.5 w-full sm:w-52 bg-white border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition-all"
+                className="pl-9 pr-4 py-1.5 w-full sm:w-52 bg-white dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition-all"
               />
             </div>
 
@@ -324,10 +324,10 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
       >
         <div style={{ minWidth: Math.max(totalWidth, 800) }} className="text-left">
           {/* Table Header - Fixed */}
-          <div className="sticky top-0 z-10 bg-gray-100 border-b border-gray-300">
+          <div className="sticky top-0 z-10 bg-gray-100 dark:bg-slate-800 border-b border-gray-300 dark:border-slate-600">
             <div className="flex">
               {/* Row Number Header */}
-              <div className="flex-shrink-0 w-16 px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+              <div className="flex-shrink-0 w-16 px-3 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                 #
               </div>
               {/* Column Headers */}
@@ -336,7 +336,7 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                   key={index}
                   onClick={() => handleSort(index)}
                   style={{ width: columnWidths[index] }}
-                  className="flex-shrink-0 px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors select-none border-l border-gray-200"
+                  className="flex-shrink-0 px-3 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors select-none border-l border-gray-200 dark:border-slate-600"
                 >
                   <div className="flex items-center gap-1">
                     <span className="truncate">{header}</span>
@@ -394,8 +394,8 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      className={`flex items-center border-b border-gray-100 hover:bg-gray-100 transition-colors ${
-                        virtualRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                      className={`flex items-center border-b border-gray-100 dark:border-slate-700 hover:bg-gray-100 dark:hover:bg-slate-700/50 transition-colors ${
+                        virtualRow.index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-gray-50 dark:bg-slate-800/80'
                       }`}
                     >
                       {/* Row Number */}
@@ -407,7 +407,7 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                         <div
                           key={cellIndex}
                           style={{ width: columnWidths[cellIndex] }}
-                          className="flex-shrink-0 px-3 py-3 text-sm text-gray-900 border-l border-gray-100"
+                          className="flex-shrink-0 px-3 py-3 text-sm text-gray-900 dark:text-gray-100 border-l border-gray-100 dark:border-slate-700"
                         >
                           <span 
                             className="block truncate" 
@@ -427,8 +427,8 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
       </div>
 
       {/* Scroll Progress Indicator */}
-      <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
-        <div className="flex items-center justify-between text-xs text-gray-500">
+      <div className="px-4 py-2 border-t border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-900/50">
+        <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
           <span>
             {rowVirtualizer.getVirtualItems().length > 0 && (
               <>
@@ -514,9 +514,9 @@ export default function Home() {
     : null;
 
   return (
-    <div className="min-h-screen bg-white text-gray-900">
+    <div className="min-h-screen bg-white dark:bg-[#0F172A] text-gray-900 dark:text-gray-100">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-[#F8F9FA] border-b border-gray-200 shadow-sm">
+      <header className="sticky top-0 z-50 bg-[#F8F9FA] dark:bg-slate-900/95 border-b border-gray-200 dark:border-slate-700 shadow-sm">
         <div className="w-full px-6">
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-4">
@@ -531,14 +531,14 @@ export default function Home() {
                 </svg>
               </div>
               <div>
-                <h1 className="text-lg font-bold text-gray-900">
+                <h1 className="text-lg font-bold text-gray-900 dark:text-white">
                   Excel Manager
                 </h1>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <span className="px-3 py-1 bg-green-50 text-green-700 text-sm font-medium rounded-lg border border-green-200">
+              <span className="px-3 py-1 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-sm font-medium rounded-lg border border-green-200 dark:border-green-700">
                 {files.length}개 파일
               </span>
               
@@ -580,7 +580,7 @@ export default function Home() {
             {selectedFile && currentSheetData ? (
               <>
                 {/* File Info */}
-                <div className="mb-4 p-3 bg-gray-50 rounded-xl border border-gray-200">
+                <div className="mb-4 p-3 bg-gray-50 dark:bg-slate-800/50 rounded-xl border border-gray-200 dark:border-slate-600">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-green-700 rounded-lg flex items-center justify-center">
                       <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -593,10 +593,10 @@ export default function Home() {
                       </svg>
                     </div>
                     <div className="flex-1">
-                      <h2 className="text-base font-semibold text-gray-900 truncate">
+                      <h2 className="text-base font-semibold text-gray-900 dark:text-white truncate">
                         {selectedFile.file.name}
                       </h2>
-                      <div className="flex flex-wrap items-center gap-x-3 text-xs text-gray-500">
+                      <div className="flex flex-wrap items-center gap-x-3 text-xs text-gray-500 dark:text-gray-400">
                         <span>{selectedFile.data.sheets.length}개 시트</span>
                         <span>•</span>
                         <span>{currentSheetData.headers.length}개 컬럼</span>
@@ -619,7 +619,7 @@ export default function Home() {
               </>
             ) : (
               /* Empty State */
-              <div className="flex flex-col items-center justify-center h-[600px] bg-gray-50 rounded-xl border border-gray-200">
+              <div className="flex flex-col items-center justify-center h-[600px] bg-gray-50 dark:bg-slate-800/50 rounded-xl border border-gray-200 dark:border-slate-600">
                 <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
                   <svg
                     className="w-10 h-10 text-gray-400"
@@ -635,10 +635,10 @@ export default function Home() {
                     />
                   </svg>
                 </div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200 mb-2">
                   파일을 선택하세요
                 </h3>
-                <p className="text-gray-500 text-center text-sm max-w-sm">
+                <p className="text-gray-500 dark:text-gray-400 text-center text-sm max-w-sm">
                   왼쪽에서 엑셀 파일을 업로드하거나<br />목록에서 파일을 선택하여 데이터를 확인하세요.
                 </p>
               </div>

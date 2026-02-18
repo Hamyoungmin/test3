@@ -58,12 +58,12 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        relative border-2 border-dashed rounded-2xl p-12 bg-white
+        relative border-2 border-dashed rounded-2xl p-12 bg-white dark:bg-slate-800
         transition-all duration-300 ease-out
         ${
           isDragging
-            ? 'border-green-500 bg-green-50 scale-[1.02]'
-            : 'border-gray-300 hover:border-green-400 hover:bg-gray-50'
+            ? 'border-green-500 dark:border-green-600 bg-green-50 dark:bg-green-900/20 scale-[1.02]'
+            : 'border-gray-300 dark:border-slate-600 hover:border-green-400 dark:hover:border-green-500 hover:bg-gray-50 dark:hover:bg-slate-700/50'
         }
         ${isLoading ? 'pointer-events-none opacity-60' : 'cursor-pointer'}
       `}
@@ -80,7 +80,7 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
         {isLoading ? (
           <>
             <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-lg font-medium text-gray-700">
+            <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
               파일 처리 중...
             </p>
           </>
@@ -89,7 +89,7 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
             <div
               className={`
                 p-4 rounded-2xl transition-colors duration-300
-                ${isDragging ? 'bg-green-100' : 'bg-gray-100'}
+                ${isDragging ? 'bg-green-100 dark:bg-green-900/40' : 'bg-gray-100 dark:bg-slate-700'}
               `}
             >
               <svg
@@ -110,10 +110,10 @@ export default function FileUpload({ onUpload, isLoading }: FileUploadProps) {
             </div>
 
             <div>
-              <p className="text-lg font-semibold text-gray-700">
+              <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">
                 {isDragging ? '여기에 파일을 놓으세요' : '엑셀 파일을 드래그하거나 클릭하세요'}
               </p>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 .xlsx, .xls, .csv 파일 지원
               </p>
             </div>

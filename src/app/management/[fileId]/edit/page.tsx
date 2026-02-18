@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Package, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Package, AlertTriangle, CheckCircle, Banknote, Clock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useDragScroll } from '@/hooks/useDragScroll';
 import AIBriefing from '@/components/AIBriefing';
@@ -27,6 +27,76 @@ const NUMERIC_COLUMNS = ['현재_재고', '현재재고', '재고', '단가', '�
 // 재고 컬럼 키워드 (현재 재고 추출용)
 const STOCK_KEYWORDS = ['현재_재고', '현재재고', '재고', '재고량', '수량', 'stock', 'quantity', '잔량'];
 
+// 품목명 컬럼 키워드 (검색용)
+const ITEM_NAME_KEYWORDS = ['품목', '품목명', '상품명', '제품명', '이름', 'name', 'item', 'product', '세목', '항목'];
+
+// 단가 컬럼 키워드 (발주 예산 계산용)
+const PRICE_KEYWORDS = ['단가', '가격', 'price', 'unit_price', '금액', '원가'];
+
+const DEFAULT_UNIT_PRICE = 1000;
+
+const LAST_CONFIRM_KEY = (fileId: string) => `lastBulkConfirm_${fileId}`;
+function formatConfirmTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const sec = String(d.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${day} ${h}:${min}:${sec}`;
+}
+
+function getUnitPriceFromRow(row: RowData, headers: string[]): number | null {
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const lower = h.toLowerCase().replace(/[\s_]/g, '');
+    if (PRICE_KEYWORDS.some(k => lower.includes(k.toLowerCase().replace(/[\s_]/g, '')))) {
+      const val = row[h];
+      if (typeof val === 'number' && !isNaN(val) && val >= 0) return val;
+      if (typeof val === 'string') {
+        const num = parseFloat(val.replace(/,/g, ''));
+        if (!isNaN(num) && num >= 0) return num;
+      }
+    }
+  }
+  return null;
+}
+
+function findItemNameColumn(headers: string[]): string | null {
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const lower = h.toLowerCase().replace(/[\s_]/g, '');
+    if (ITEM_NAME_KEYWORDS.some(k => lower.includes(k.toLowerCase().replace(/[\s_]/g, '')))) {
+      return h;
+    }
+  }
+  return null;
+}
+
+function getItemNameFromRow(row: RowData, headers: string[]): string {
+  const col = findItemNameColumn(headers);
+  if (col && row[col] != null) return String(row[col]);
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const v = row[h];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return '';
+}
+
+// 현재 재고 컬럼 찾기 (배지 표시용)
+function findCurrentStockColumn(headers: string[]): string | null {
+  for (const h of headers) {
+    if (h === 'id') continue;
+    const lower = h.toLowerCase().replace(/[\s_]/g, '');
+    if (STOCK_KEYWORDS.some(sk => lower.includes(sk.toLowerCase().replace(/[\s_]/g, '')))) {
+      return h;
+    }
+  }
+  return null;
+}
+
 function getCurrentStockFromRow(row: RowData, headers: string[]): number | null {
   for (const h of headers) {
     if (h === 'id') continue;
@@ -48,6 +118,23 @@ function getCurrentStockFromRow(row: RowData, headers: string[]): number | null 
   return null;
 }
 
+// 재고 상태 배지 계산 (현재 vs 기준)
+function getStockStatusBadge(
+  row: RowData,
+  headers: string[],
+  currentStockCol: string | null
+): StockStatusBadge | null {
+  if (!currentStockCol || row.base_stock == null || row.base_stock === undefined) return null;
+  const base = Number(row.base_stock);
+  if (isNaN(base)) return null;
+  const curVal = row[currentStockCol];
+  const cur = curVal != null ? Number(curVal) : null;
+  if (cur === null || isNaN(cur)) return null;
+  if (cur < base) return { label: '재고 부족', bgClass: 'bg-[#FEE2E2] dark:bg-red-900/50', textClass: 'text-[#EF4444] dark:text-red-400' };
+  if (Math.abs(cur - base) < 0.01) return { label: '주의', bgClass: 'bg-[#FFEDD5] dark:bg-amber-900/40', textClass: 'text-[#F97316] dark:text-amber-400' };
+  return { label: '여유', bgClass: 'bg-[#DCFCE7] dark:bg-green-900/40', textClass: 'text-[#22C55E] dark:text-green-400' };
+}
+
 // 숫자 전용 컬럼인지 확인
 function isNumericColumn(column: string): boolean {
   const lowerColumn = column.toLowerCase();
@@ -66,6 +153,9 @@ function validateNumericValue(value: string): { isValid: boolean; numValue: numb
   return { isValid: true, numValue: num };
 }
 
+// 재고 상태 배지 타입
+type StockStatusBadge = { label: string; bgClass: string; textClass: string };
+
 // 개별 셀 컴포넌트
 function EditableCell({
   value,
@@ -76,6 +166,7 @@ function EditableCell({
   onSave,
   onCancel,
   onValidationError,
+  stockStatusBadge,
 }: {
   value: CellValue;
   rowId: number;
@@ -85,6 +176,7 @@ function EditableCell({
   onSave: (newValue: CellValue) => void;
   onCancel: () => void;
   onValidationError?: (message: string) => void;
+  stockStatusBadge?: StockStatusBadge | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [editValue, setEditValue] = useState<string>(String(value ?? ''));
@@ -182,17 +274,30 @@ function EditableCell({
     );
   }
 
+  const displayValue = value !== null && value !== undefined
+    ? (isNumeric && typeof value === 'number' ? value.toLocaleString() : String(value))
+    : '';
+
   return (
     <div
       onClick={onStartEdit}
-      className={`w-full h-full px-2 py-1.5 cursor-pointer hover:bg-green-50 transition-colors truncate ${
-        isNumeric ? 'text-right font-mono' : ''
+      className={`w-full h-full px-2 py-1.5 cursor-pointer hover:bg-green-50 transition-colors min-h-[30px] ${
+        stockStatusBadge
+          ? 'flex items-center justify-end gap-1.5 font-mono'
+          : isNumeric
+            ? 'text-right font-mono truncate'
+            : 'truncate'
       }`}
       title={String(value ?? '')}
     >
-      {value !== null && value !== undefined ? (
-        isNumeric && typeof value === 'number' ? value.toLocaleString() : String(value)
-      ) : ''}
+      <span className={isNumeric ? 'tabular-nums' : ''}>{displayValue}</span>
+      {stockStatusBadge && !isEditing && (
+        <span
+          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${stockStatusBadge.bgClass} ${stockStatusBadge.textClass}`}
+        >
+          {stockStatusBadge.label}
+        </span>
+      )}
     </div>
   );
 }
@@ -427,7 +532,7 @@ interface SortConfig {
 export default function EditPage() {
   const params = useParams();
   const router = useRouter();
-  const fileId = params.fileId as string;
+  const fileId = (params?.fileId as string) ?? '';
 
   const [data, setData] = useState<RowData[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
@@ -445,8 +550,14 @@ export default function EditPage() {
   
   // AI 분석 재요청 트리거
   const [aiRefreshTrigger, setAiRefreshTrigger] = useState(0);
-  // 검색 필터
+  // 검색 필터 (품목명)
   const [searchQuery, setSearchQuery] = useState('');
+  // 재고 부족 품목만 보기 토글
+  const [filterLowStockOnly, setFilterLowStockOnly] = useState(false);
+  // 단가 수동 오버라이드 (rowId -> 단가) - 데이터에 단가가 없을 때 기본 1000원 대신 사용
+  const [unitPriceOverrides, setUnitPriceOverrides] = useState<Map<number, number>>(new Map());
+  // 단가 편집 중인 행 ID
+  const [editingUnitPriceRowId, setEditingUnitPriceRowId] = useState<number | null>(null);
   
   // 최종 확정 모달 상태
   const [confirmModal, setConfirmModal] = useState<{
@@ -466,6 +577,9 @@ export default function EditPage() {
 
   // 저장되지 않은 변경사항 개수
   const unsavedChangesCount = modifiedRows.size + newRows.size;
+
+  // 현재 재고 컬럼 (배지 표시용)
+  const currentStockColumn = useMemo(() => findCurrentStockColumn(headers), [headers]);
 
   // 빈 행 생성 (음수 id로 구분)
   const emptyRows = useMemo(() => {
@@ -491,19 +605,31 @@ export default function EditPage() {
     });
   };
 
-  // 검색 필터링된 데이터
+  // 검색 및 필터링된 데이터 (품목명 검색 + 재고 부족 필터)
   const filteredData = useMemo(() => {
-    if (!searchQuery.trim()) return data;
-    
-    const query = searchQuery.toLowerCase().trim();
-    return data.filter(row => {
-      return headers.some(header => {
-        const value = row[header];
-        if (value === null || value === undefined) return false;
-        return String(value).toLowerCase().includes(query);
+    let result = data;
+
+    // 1. 품목명 검색
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter(row => {
+        const itemName = getItemNameFromRow(row, headers);
+        return itemName.toLowerCase().includes(query);
       });
-    });
-  }, [data, headers, searchQuery]);
+    }
+
+    // 2. 재고 부족 품목만 보기
+    if (filterLowStockOnly) {
+      result = result.filter(row => {
+        const base = row.base_stock;
+        if (base == null || base === undefined) return false;
+        const cur = getCurrentStockFromRow(row, headers);
+        return cur !== null && cur < base;
+      });
+    }
+
+    return result;
+  }, [data, headers, searchQuery, filterLowStockOnly]);
 
   // 정렬된 데이터
   const sortedData = useMemo(() => {
@@ -541,18 +667,43 @@ export default function EditPage() {
     return [...sortedData, ...mergedEmptyRows];
   }, [sortedData, emptyRows, newRows]);
 
-  // 요약 대시보드 통계 (테이블 데이터 변경 시 실시간 반영)
+  // 요약 대시보드 통계 (검색/필터 결과에 따라 실시간 반영)
   const summaryStats = useMemo(() => {
-    const total = data.length;
-    const confirmed = data.filter(row => row.base_stock != null && row.base_stock !== undefined).length;
-    const lowStock = data.filter(row => {
+    const total = filteredData.length;
+    const confirmed = filteredData.filter(row => row.base_stock != null && row.base_stock !== undefined).length;
+    const lowStock = filteredData.filter(row => {
       const base = row.base_stock;
       if (base == null || base === undefined) return false;
       const cur = getCurrentStockFromRow(row, headers);
       return cur !== null && cur < base;
     }).length;
     return { total, confirmed, lowStock };
-  }, [data, headers]);
+  }, [filteredData, headers]);
+
+  // 품목별 단가 (오버라이드 > 데이터 > 기본값 1000)
+  const getEffectiveUnitPrice = useCallback((row: RowData) => {
+    const override = unitPriceOverrides.get(row.id);
+    if (override !== undefined && override >= 0) return override;
+    const fromData = getUnitPriceFromRow(row, headers);
+    return fromData ?? DEFAULT_UNIT_PRICE;
+  }, [unitPriceOverrides, headers]);
+
+  // 품목별 예상 발주 비용 (부족 수량 × 단가)
+  const getRowOrderCost = useCallback((row: RowData): number => {
+    const base = row.base_stock;
+    if (base == null || base === undefined) return 0;
+    const cur = getCurrentStockFromRow(row, headers);
+    if (cur === null || cur >= base) return 0;
+    const shortage = base - cur;
+    return shortage * getEffectiveUnitPrice(row);
+  }, [headers, getEffectiveUnitPrice]);
+
+  // 총 예상 발주 비용
+  const totalOrderBudget = useMemo(() => {
+    return filteredData.reduce((sum, row) => sum + getRowOrderCost(row), 0);
+  }, [filteredData, getRowOrderCost]);
+
+  const formatCurrency = (n: number) => `₩${(typeof n === 'number' && !isNaN(n) ? n : 0).toLocaleString()}`;
 
   // 스크롤 감지: 세로 바닥 → 빈 행 추가, 가로 끝 → 컬럼 추가 버튼 표시
   useEffect(() => {
@@ -582,6 +733,10 @@ export default function EditPage() {
 
   // 데이터 불러오기 - 해당 파일의 data 필드(JSONB)의 모든 키를 자동 추출하여 헤더로 사용
   const fetchData = useCallback(async () => {
+    if (!fileId || typeof fileId !== 'string') {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     try {
       // 해당 파일명의 데이터만 가져오기 (pagination 적용)
@@ -670,6 +825,17 @@ export default function EditPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // localStorage에서 최종 확정 일시 복원
+  useEffect(() => {
+    if (typeof window === 'undefined' || !fileId) return;
+    try {
+      const stored = localStorage.getItem(LAST_CONFIRM_KEY(fileId));
+      if (stored) setLastConfirmedAt(stored);
+    } catch {
+      // ignore
+    }
+  }, [fileId]);
 
   // 셀 편집 시작
   const handleStartEdit = (rowId: number, column: string, value: CellValue) => {
@@ -807,7 +973,7 @@ export default function EditPage() {
         // 새 행 삽입 시 file_name, row_index 포함
         if (includeMetadata) {
           return {
-            file_name: fileId || 'unknown',
+            file_name: fileId ? decodeURIComponent(fileId) : 'unknown',
             row_index: rowIdx,
             data: dataObj,
           };
@@ -852,9 +1018,13 @@ export default function EditPage() {
         }
 
         if (insertedData) {
-          // 삽입된 행을 data에 추가 (평탄화해서 추가)
+          // 삽입된 행을 data에 추가 (평탄화 + base_stock/alarm_status 포함)
           const flattenedInserted: RowData[] = insertedData.map(item => {
-            const flatRow: RowData = { id: item.id };
+            const flatRow: RowData = {
+              id: item.id,
+              base_stock: item.base_stock ?? null,
+              alarm_status: item.alarm_status ?? false,
+            };
             if (item.data && typeof item.data === 'object') {
               Object.entries(item.data as object).forEach(([key, value]) => {
                 flatRow[key] = value as CellValue;
@@ -1026,6 +1196,7 @@ export default function EditPage() {
 
   // 전체 최종 확정 - 모든 행의 현재 재고를 기준 재고로 설정
   const [isBulkConfirming, setIsBulkConfirming] = useState(false);
+  const [lastConfirmedAt, setLastConfirmedAt] = useState<string | null>(null);
   
   // 재고 컬럼에서 현재 재고 값 찾기 (헬퍼 함수)
   const findCurrentStockValue = (row: RowData): number => {
@@ -1062,7 +1233,7 @@ export default function EditPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          fileName: decodeURIComponent(fileId),
+          fileName: fileId ? decodeURIComponent(fileId) : '',
         }),
       });
 
@@ -1070,6 +1241,7 @@ export default function EditPage() {
 
       if (!result.success) {
         setMessage({ type: 'error', text: result.error || '전체 확정 실패' });
+        setTimeout(() => setMessage(null), 5000);
         return;
       }
 
@@ -1082,6 +1254,15 @@ export default function EditPage() {
           alarm_status: false, // 확정 시점에서는 알람 없음
         };
       }));
+
+      // 최종 확정 일시 즉시 갱신 + localStorage에 저장
+      const now = new Date().toISOString();
+      setLastConfirmedAt(now);
+      try {
+        if (fileId) localStorage.setItem(LAST_CONFIRM_KEY(fileId), now);
+      } catch {
+        // ignore
+      }
 
       setMessage({ 
         type: 'success', 
@@ -1114,7 +1295,7 @@ export default function EditPage() {
       const { data: inserted, error } = await supabase
         .from('재고')
         .insert([{
-          file_name: fileId || 'unknown',
+          file_name: fileId ? decodeURIComponent(fileId) : 'unknown',
           row_index: data.length,
           data: dataObj,
         }])
@@ -1124,8 +1305,12 @@ export default function EditPage() {
       if (error) throw error;
 
       if (inserted) {
-        // 평탄화해서 추가
-        const flatRow: RowData = { id: inserted.id };
+        // 평탄화해서 추가 (base_stock, alarm_status 포함)
+        const flatRow: RowData = {
+          id: inserted.id,
+          base_stock: inserted.base_stock ?? null,
+          alarm_status: inserted.alarm_status ?? false,
+        };
         if (inserted.data && typeof inserted.data === 'object') {
           Object.entries(inserted.data as object).forEach(([key, value]) => {
             flatRow[key] = value as CellValue;
@@ -1263,9 +1448,28 @@ export default function EditPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white dark:bg-[#0F172A] relative">
+      {/* 전체 최종 확정 진행 오버레이 */}
+      {isBulkConfirming && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-600 p-8 max-w-md mx-4 flex flex-col items-center">
+            <div className="w-16 h-16 border-4 border-green-200 rounded-full flex items-center justify-center mb-4">
+              <div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+            <p className="text-lg font-semibold text-gray-900 dark:text-white">전체 최종 확정 중</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{data.length}개 행 처리 중...</p>
+            <div className="mt-6 w-full max-w-xs">
+              <div className="h-2 bg-green-100 rounded-full overflow-hidden">
+                <div className="h-full w-1/3 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full animate-progress-slide" />
+              </div>
+              <p className="text-xs text-green-600 mt-2 text-center">약 10~30초 소요될 수 있습니다</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
+      <header className="sticky top-0 z-50 bg-white dark:bg-slate-900/95 border-b border-gray-200 dark:border-slate-700 shadow-sm">
         <div className="w-full px-4">
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-3">
@@ -1275,10 +1479,10 @@ export default function EditPage() {
                 </svg>
               </div>
               <div>
-                <h1 className="text-sm font-bold text-gray-900 truncate max-w-[400px]" title={decodeURIComponent(fileId)}>
-                  {decodeURIComponent(fileId)}
+                <h1 className="text-sm font-bold text-gray-900 dark:text-white truncate max-w-[400px]" title={fileId ? decodeURIComponent(fileId) : '파일'}>
+                  {fileId ? decodeURIComponent(fileId) : '파일'}
                 </h1>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
                   셀을 클릭하여 수정 • Enter로 저장 • Esc로 취소
                 </p>
               </div>
@@ -1371,6 +1575,13 @@ export default function EditPage() {
                 {isBulkConfirming ? '확정 중...' : '전체 최종 확정'}
               </button>
 
+              {lastConfirmedAt && (
+                <span className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  최종 확정 일시: {formatConfirmTimestamp(lastConfirmedAt)}
+                </span>
+              )}
+
               {/* 엑셀 내보내기 */}
               <button
                 onClick={handleExportExcel}
@@ -1385,7 +1596,7 @@ export default function EditPage() {
 
               {/* 파일 상세 페이지로 */}
               <Link
-                href={`/management/file/${encodeURIComponent(decodeURIComponent(fileId))}`}
+                href={`/management/file/${encodeURIComponent(fileId ? decodeURIComponent(fileId) : '')}`}
                 className="flex items-center gap-1 px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1399,28 +1610,29 @@ export default function EditPage() {
       </header>
 
       {/* AI 경영 브리핑 섹션 */}
-      <div className="px-4 py-4 bg-gray-50">
+      <div className="px-4 py-4 bg-gray-50 dark:bg-slate-800/50">
         <AIBriefing 
           data={data}
           headers={headers}
-          fileName={decodeURIComponent(fileId)}
+          fileName={fileId ? decodeURIComponent(fileId) : ''}
           onRefreshTrigger={aiRefreshTrigger}
+          totalOrderBudget={totalOrderBudget}
         />
       </div>
 
-      {/* Stats Bar + Search */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2">
+      {/* Stats Bar */}
+      <div className="bg-white dark:bg-slate-900/50 border-b border-gray-200 dark:border-slate-700 px-4 py-2">
         <div className="flex items-center justify-between">
           {/* 왼쪽: 통계 정보 */}
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span>총 <span className="text-gray-900 font-medium">{data.length}</span> 행</span>
+          <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+            <span>총 <span className="text-gray-900 dark:text-white font-medium">{data.length}</span> 행</span>
             <span>•</span>
-            <span><span className="text-gray-900 font-medium">{headers.length}</span> 컬럼</span>
-            {searchQuery && (
+            <span><span className="text-gray-900 dark:text-white font-medium">{headers.length}</span> 컬럼</span>
+            {(searchQuery || filterLowStockOnly) && (
               <>
                 <span>•</span>
                 <span className="text-cyan-600">
-                  검색 결과: <span className="font-medium">{filteredData.length}</span>개
+                  표시: <span className="font-medium">{filteredData.length}</span>개
                 </span>
               </>
             )}
@@ -1466,11 +1678,75 @@ export default function EditPage() {
             )}
           </div>
 
-          {/* 오른쪽: 검색창 */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
+          {/* 오른쪽: 정렬 초기화 */}
+          {sortConfig.column && (
+            <button
+              onClick={() => setSortConfig({ column: null, direction: null })}
+              className="px-2 py-1.5 text-xs bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200 transition-colors"
+              title="정렬 초기화"
+            >
+              정렬 해제
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 요약 대시보드 */}
+      {data.length > 0 && headers.length > 0 && (
+        <div className="px-4 py-3 bg-white border-b border-[#E5E7EB]">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* 전체 품목 */}
+            <div className="flex items-center gap-3 p-4 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-600 rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center flex-shrink-0">
+                <Package className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">전체 품목</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{summaryStats.total.toLocaleString()}</p>
+              </div>
+            </div>
+            {/* 재고 부족 */}
+            <div className="flex items-center gap-3 p-4 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-600 rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">재고 부족</p>
+                <p className="text-xl font-bold text-red-600">{summaryStats.lowStock.toLocaleString()}</p>
+              </div>
+            </div>
+            {/* 최종 확정 */}
+            <div className="flex items-center gap-3 p-4 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-600 rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">최종 확정</p>
+                <p className="text-xl font-bold text-green-600">{summaryStats.confirmed.toLocaleString()}</p>
+              </div>
+            </div>
+            {/* 총 예상 발주 비용 */}
+            <div className="flex items-center gap-3 p-4 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-600 rounded-xl shadow-sm">
+              <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
+                <Banknote className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">총 예상 발주 비용</p>
+                <p className="text-xl font-bold text-amber-700">{formatCurrency(totalOrderBudget)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 검색 및 필터링 (대시보드와 테이블 사이) */}
+      {data.length > 0 && headers.length > 0 && (
+        <div className="px-4 py-3 bg-white border-b border-[#E5E7EB]">
+          <div className="flex items-center gap-3">
+            {/* 품목명 검색창 */}
+            <div className="relative flex-1">
               <svg 
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" 
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" 
                 fill="none" 
                 stroke="currentColor" 
                 viewBox="0 0 24 24"
@@ -1481,13 +1757,13 @@ export default function EditPage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="검색어 입력..."
-                className="w-64 pl-9 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                placeholder="품목명 검색..."
+                className="w-full pl-10 pr-10 py-2.5 bg-gray-50 border border-[#E5E7EB] rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1495,54 +1771,25 @@ export default function EditPage() {
                 </button>
               )}
             </div>
-            {/* 정렬 초기화 버튼 */}
-            {sortConfig.column && (
-              <button
-                onClick={() => setSortConfig({ column: null, direction: null })}
-                className="px-2 py-1.5 text-xs bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200 transition-colors"
-                title="정렬 초기화"
+            {/* 재고 부족 품목만 보기 토글 */}
+            <button
+              onClick={() => setFilterLowStockOnly(prev => !prev)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+                filterLowStockOnly 
+                  ? 'bg-red-50 border-red-200 text-red-700' 
+                  : 'bg-gray-50 border-[#E5E7EB] text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <svg 
+                className="w-4 h-4" 
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24"
               >
-                정렬 해제
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 요약 대시보드 */}
-      {data.length > 0 && headers.length > 0 && (
-        <div className="px-4 py-3 bg-white border-b border-[#E5E7EB]">
-          <div className="grid grid-cols-3 gap-4">
-            {/* 전체 품목 */}
-            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
-              <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-                <Package className="w-5 h-5 text-gray-600" />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">전체 품목</p>
-                <p className="text-xl font-bold text-gray-900">{summaryStats.total.toLocaleString()}</p>
-              </div>
-            </div>
-            {/* 재고 부족 */}
-            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
-              <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0">
-                <AlertTriangle className="w-5 h-5 text-red-600" />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">재고 부족</p>
-                <p className="text-xl font-bold text-red-600">{summaryStats.lowStock.toLocaleString()}</p>
-              </div>
-            </div>
-            {/* 최종 확정 */}
-            <div className="flex items-center gap-3 p-4 bg-white border border-[#E5E7EB] rounded-xl shadow-sm">
-              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">최종 확정</p>
-                <p className="text-xl font-bold text-green-600">{summaryStats.confirmed.toLocaleString()}</p>
-              </div>
-            </div>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+              재고 부족만
+            </button>
           </div>
         </div>
       )}
@@ -1571,7 +1818,7 @@ export default function EditPage() {
             </Link>
           </div>
         ) : (
-          <table className="border-collapse text-left" style={{ minWidth: Math.max(headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50, 800) }}>
+          <table className="border-collapse text-left" style={{ minWidth: Math.max(headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50 + 112 + 128, 800) }}>
             {/* Header */}
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50">
@@ -1619,6 +1866,14 @@ export default function EditPage() {
                     </th>
                   );
                 })}
+                {/* 단가 (편집 가능) */}
+                <th className="w-28 px-2 py-3 text-right text-xs font-semibold text-gray-600 border border-gray-200 bg-amber-50">
+                  단가
+                </th>
+                {/* 예상 비용 */}
+                <th className="w-32 px-2 py-3 text-right text-xs font-semibold text-gray-600 border border-gray-200 bg-amber-50">
+                  예상 비용
+                </th>
                 {/* 컬럼 추가 버튼 - 항상 맨 오른쪽에 표시 */}
                 <th 
                   className={`w-12 px-2 py-3 text-center border border-gray-200 bg-gray-50 sticky right-0 z-20 transition-all ${
@@ -1758,7 +2013,7 @@ export default function EditPage() {
                             )}
                           </div>
                         ) : (
-                          // 편집 가능한 셀 (빈 행 포함)
+                          // 편집 가능한 셀 (빈 행 포함) + 현재 재고 열에 상태 배지
                           <EditableCell
                             value={row[header]}
                             rowId={row.id}
@@ -1771,11 +2026,66 @@ export default function EditPage() {
                               setMessage({ type: 'error', text: msg });
                               setTimeout(() => setMessage(null), 3000);
                             }}
+                            stockStatusBadge={header === currentStockColumn && !isEmptyRow ? getStockStatusBadge(row, headers, currentStockColumn) : null}
                           />
                         )}
                       </td>
                     );
                   })}
+                  {/* 단가 (편집 가능) */}
+                  <td className="w-28 px-2 py-1.5 text-right border border-gray-100 bg-amber-50/50">
+                    {isEmptyRow ? (
+                      <span className="text-gray-400 text-xs">-</span>
+                    ) : editingUnitPriceRowId === row.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          defaultValue={getEffectiveUnitPrice(row)}
+                          onBlur={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v) && v >= 0) {
+                              setUnitPriceOverrides(prev => new Map(prev).set(row.id, v));
+                            }
+                            setEditingUnitPriceRowId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const v = parseInt((e.target as HTMLInputElement).value, 10);
+                              if (!isNaN(v) && v >= 0) {
+                                setUnitPriceOverrides(prev => new Map(prev).set(row.id, v));
+                              }
+                              setEditingUnitPriceRowId(null);
+                            } else if (e.key === 'Escape') {
+                              setEditingUnitPriceRowId(null);
+                            }
+                          }}
+                          className="w-20 px-1 py-0.5 text-xs font-mono border border-amber-300 rounded focus:ring-1 focus:ring-amber-500 outline-none"
+                          autoFocus
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setEditingUnitPriceRowId(row.id)}
+                        className="text-xs font-mono text-amber-800 hover:bg-amber-100 px-1 py-0.5 rounded cursor-pointer w-full text-right"
+                        title="클릭하여 단가 수정"
+                      >
+                        {getEffectiveUnitPrice(row).toLocaleString()}원
+                      </button>
+                    )}
+                  </td>
+                  {/* 예상 비용 */}
+                  <td className="w-32 px-2 py-1.5 text-right border border-gray-100 bg-amber-50/50 font-mono text-sm">
+                    {isEmptyRow ? (
+                      <span className="text-gray-400 text-xs">-</span>
+                    ) : (
+                      <span className={getRowOrderCost(row) > 0 ? 'text-amber-700 font-semibold' : 'text-gray-500'}>
+                        {getRowOrderCost(row) > 0 ? formatCurrency(getRowOrderCost(row)) : '-'}
+                      </span>
+                    )}
+                  </td>
                   {/* 컬럼 추가 버튼 자리 (빈 셀) */}
                   <td className="w-12 border border-gray-100 bg-inherit sticky right-0"></td>
                 </tr>

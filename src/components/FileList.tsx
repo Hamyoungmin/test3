@@ -28,17 +28,17 @@ export default function FileList({ files, selectedFile, onSelect, onDelete }: Fi
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-        <h3 className="text-lg font-semibold text-gray-900">
+    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-600 overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-900/50">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
           업로드된 파일
         </h3>
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           {files.length}개의 파일
         </p>
       </div>
 
-      <div className="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
+      <div className="divide-y divide-gray-100 dark:divide-slate-700 max-h-[400px] overflow-y-auto">
         {files.map((file, index) => (
           <div
             key={file.id}
@@ -48,8 +48,8 @@ export default function FileList({ files, selectedFile, onSelect, onDelete }: Fi
               animate-slide-in
               ${
                 selectedFile?.id === file.id
-                  ? 'bg-green-50'
-                  : 'hover:bg-gray-50'
+                  ? 'bg-green-50 dark:bg-green-900/20'
+                  : 'hover:bg-gray-50 dark:hover:bg-slate-700/50'
               }
             `}
             style={{ animationDelay: `${index * 50}ms` }}
@@ -60,8 +60,8 @@ export default function FileList({ files, selectedFile, onSelect, onDelete }: Fi
                 flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center
                 ${
                   selectedFile?.id === file.id
-                    ? 'bg-green-600 text-white'
-                    : 'bg-green-50 text-green-600'
+                    ? 'bg-green-600 dark:bg-green-500 text-white'
+                    : 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                 }
               `}
             >
@@ -77,10 +77,10 @@ export default function FileList({ files, selectedFile, onSelect, onDelete }: Fi
 
             {/* Info */}
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-gray-900 truncate">
+              <p className="font-medium text-gray-900 dark:text-white truncate">
                 {file.name}
               </p>
-              <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+              <div className="flex items-center gap-3 mt-1 text-sm text-gray-500 dark:text-gray-400">
                 <span>{formatFileSize(file.size)}</span>
                 <span>•</span>
                 <span>{file.sheets.length}개 시트</span>
@@ -95,7 +95,7 @@ export default function FileList({ files, selectedFile, onSelect, onDelete }: Fi
                 e.stopPropagation();
                 onDelete(file.id);
               }}
-              className="flex-shrink-0 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              className="flex-shrink-0 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path

@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Dark mode: class-based (html.dark) */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Custom CSS Variables - Light Mode Theme */
 :root {
   --background: #FFFFFF;
@@ -75,6 +78,26 @@
   animation: pulse-glow 2s infinite;
 }
 
+/* Indeterminate progress bar (AI 분석, 전체 확정 등) */
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.animate-progress-slide {
+  animation: progress-slide 2s ease-in-out infinite;
+}
+
+/* Skeleton UI - 부드러운 깜빡임 */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.animate-skeleton-pulse {
+  animation: skeleton-pulse 2s ease-in-out infinite;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -93,6 +116,28 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Dark mode overrides */
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  background-color: #0F172A;
+  color: #F1F5F9;
 }
 
 /* Base light mode body styles */
