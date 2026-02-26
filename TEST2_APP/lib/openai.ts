@@ -98,9 +98,10 @@ function generateLocalAdvice(inventoryData: InventoryData[]): string {
 
   // 총 부족량
   const totalShortage = lowStockItems.reduce((sum, item) => sum + item.shortage, 0);
+  const safeShortage = Math.min(totalShortage, 999999999);
 
   const advices = [
-    `${lowStockItems.length}개 품목 중 "${mostUrgent.itemName}"이 가장 급해요! 총 ${totalShortage}개 발주가 필요합니다. 📋`,
+    `${lowStockItems.length}개 품목 중 "${mostUrgent.itemName}"이 가장 급해요! 총 ${safeShortage.toLocaleString()}개 발주가 필요합니다. 📋`,
     `오늘 "${mostUrgent.itemName}" 먼저 주문하시고, 나머지 ${lowStockItems.length - 1}개 품목도 체크해보세요! 🔍`,
     `"${mostUrgent.itemName}" 외 ${lowStockItems.length - 1}개 품목 재고 부족! 오전 중 발주 추천드려요. ⏰`,
   ];

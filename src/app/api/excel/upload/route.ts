@@ -2,53 +2,82 @@ import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import { ParsedExcelData, SheetData } from '@/types/excel';
 
-// CSV 파싱 함수
+/** 셀 값을 안전하게 파싱 (빈 값, 형식 오류 시 null 반환) */
+function safeParseCellValue(v: unknown): string | number | boolean | null {
+  if (v == null || v === '') return null;
+  try {
+    const str = String(v).trim();
+    if (str === '') return null;
+    const num = Number(str.replace(/,/g, ''));
+    if (!isNaN(num) && str !== '') return num;
+    const lower = str.toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+    return str;
+  } catch {
+    return null;
+  }
+}
+
+// CSV 파싱 함수 (예외 처리 강화)
 function parseCSV(text: string): { headers: string[]; rows: (string | number | boolean | null)[][] } {
-  const lines = text.split(/\r?\n/).filter(line => line.trim());
-  if (lines.length === 0) {
+  let lines: string[];
+  try {
+    if (!text || typeof text !== 'string') return { headers: [], rows: [] };
+    lines = text.split(/\r?\n/).filter(line => line != null && String(line).trim() !== '');
+    if (lines.length === 0) return { headers: [], rows: [] };
+  } catch {
     return { headers: [], rows: [] };
   }
 
-  // CSV 파싱 (쉼표로 분리, 따옴표 처리)
   const parseLine = (line: string): string[] => {
-    const result: string[] = [];
-    let current = '';
-    let inQuotes = false;
+    try {
+      const result: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      const s = String(line);
 
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
+      for (let i = 0; i < s.length; i++) {
+        const char = s[i];
+        if (char === '"') {
+          if (inQuotes && s[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
         } else {
-          inQuotes = !inQuotes;
+          current += char;
         }
-      } else if (char === ',' && !inQuotes) {
-        result.push(current.trim());
-        current = '';
-      } else {
-        current += char;
       }
+      result.push(current.trim());
+      return result;
+    } catch {
+      return [];
     }
-    result.push(current.trim());
-    return result;
   };
 
-  const headers = parseLine(lines[0]).map((h, i) => h || `Column ${i + 1}`);
-  const rows = lines.slice(1).map(line => {
-    const values = parseLine(line);
-    return values.map(v => {
-      if (v === '') return null;
-      const num = Number(v);
-      if (!isNaN(num) && v !== '') return num;
-      if (v.toLowerCase() === 'true') return true;
-      if (v.toLowerCase() === 'false') return false;
-      return v;
-    });
-  });
+  try {
+    const firstLine = lines[0];
+    const headers = parseLine(firstLine ?? '').map((h, i) => (h != null && String(h).trim() !== '') ? String(h).trim() : `Column_${i + 1}`);
+    const rows: (string | number | boolean | null)[][] = [];
 
-  return { headers, rows };
+    for (let i = 1; i < lines.length; i++) {
+      try {
+        const values = parseLine(lines[i] ?? '');
+        rows.push(values.map(v => safeParseCellValue(v)));
+      } catch {
+        rows.push([]);
+      }
+    }
+
+    return { headers, rows };
+  } catch {
+    return { headers: [], rows: [] };
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -87,8 +116,8 @@ export async function POST(request: NextRequest) {
       const { headers, rows } = parseCSV(text);
 
       const sheetData: SheetData = {
-        headers,
-        rows,
+        headers: Array.isArray(headers) ? headers : [],
+        rows: Array.isArray(rows) ? rows : [],
       };
 
       parsedData.sheets.push({
@@ -104,64 +133,75 @@ export async function POST(request: NextRequest) {
       // @ts-expect-error - ExcelJS 타입이 Node.js 22+ Buffer 제네릭을 지원하지 않음
       await workbook.xlsx.load(buffer);
 
-      // 각 시트 처리
+      // 각 시트 처리 (예외 처리 강화)
       workbook.eachSheet((worksheet) => {
-        const sheetData: SheetData = {
-          headers: [],
-          rows: [],
-        };
+        try {
+          const sheetData: SheetData = {
+            headers: [],
+            rows: [],
+          };
 
-        let isFirstRow = true;
-        
-        worksheet.eachRow((row, rowNumber) => {
-          const rowValues: (string | number | boolean | null)[] = [];
-          
-          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            let cellValue: string | number | boolean | null = null;
-            
-            if (cell.value !== null && cell.value !== undefined) {
-              if (typeof cell.value === 'object') {
-                // 날짜나 다른 객체 타입 처리
-                if (cell.value instanceof Date) {
-                  cellValue = cell.value.toLocaleDateString('ko-KR');
-                } else if ('result' in cell.value) {
-                  // 수식 결과
-                  cellValue = String(cell.value.result);
-                } else if ('text' in cell.value) {
-                  // 리치 텍스트
-                  cellValue = String(cell.value.text);
-                } else {
-                  cellValue = String(cell.value);
+          let isFirstRow = true;
+
+          worksheet.eachRow((row, rowNumber) => {
+            try {
+              const rowValues: (string | number | boolean | null)[] = [];
+
+              row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                try {
+                  let cellValue: string | number | boolean | null = null;
+
+                  if (cell?.value != null && cell.value !== undefined) {
+                    const val = cell.value;
+                    if (typeof val === 'object') {
+                      if (val instanceof Date) {
+                        cellValue = val.toLocaleDateString('ko-KR');
+                      } else if (val && typeof val === 'object' && 'result' in val) {
+                        cellValue = safeParseCellValue((val as { result: unknown }).result);
+                      } else if (val && typeof val === 'object' && 'text' in val) {
+                        cellValue = String((val as { text: unknown }).text ?? '');
+                      } else {
+                        cellValue = safeParseCellValue(val);
+                      }
+                    } else {
+                      cellValue = safeParseCellValue(val);
+                    }
+                  }
+                  rowValues.push(cellValue ?? null);
+                } catch {
+                  rowValues.push(null);
                 }
+              });
+
+              if (isFirstRow) {
+                sheetData.headers = rowValues.map((v, i) =>
+                  v != null && String(v).trim() !== '' ? String(v).trim() : `Column_${i + 1}`
+                );
+                isFirstRow = false;
               } else {
-                cellValue = cell.value as string | number | boolean;
+                sheetData.rows.push(rowValues);
               }
+            } catch {
+              /* 해당 행 스킵 */
             }
-            
-            rowValues.push(cellValue);
           });
 
-          // 첫 번째 행은 헤더로 처리
-          if (isFirstRow) {
-            sheetData.headers = rowValues.map((v, i) => 
-              v !== null ? String(v) : `Column ${i + 1}`
-            );
-            isFirstRow = false;
-          } else {
-            sheetData.rows.push(rowValues);
-          }
-        });
-
-        parsedData.sheets.push({
-          name: worksheet.name,
-          data: sheetData,
-        });
+          parsedData.sheets.push({
+            name: String(worksheet.name || 'Sheet1'),
+            data: sheetData,
+          });
+        } catch {
+          /* 해당 시트 스킵 */
+        }
       });
     }
+
+    const totalRowCount = parsedData.sheets.reduce((sum, s) => sum + (s.data?.rows?.length ?? 0), 0);
 
     return NextResponse.json({
       success: true,
       data: parsedData,
+      totalRowCount,
       file: {
         id: crypto.randomUUID(),
         name: originalFileName,
@@ -169,8 +209,8 @@ export async function POST(request: NextRequest) {
         uploadedAt: new Date(),
         sheets: parsedData.sheets.map((sheet) => ({
           name: sheet.name,
-          rowCount: sheet.data.rows.length,
-          columnCount: sheet.data.headers.length,
+          rowCount: sheet.data?.rows?.length ?? 0,
+          columnCount: sheet.data?.headers?.length ?? 0,
         })),
       },
     });

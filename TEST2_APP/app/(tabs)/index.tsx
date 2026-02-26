@@ -18,7 +18,7 @@ import {
   Share,
   AppState,
 } from 'react-native';
-import Reanimated, { useAnimatedStyle, useSharedValue, withTiming, interpolateColor } from 'react-native-reanimated';
+// Reanimated은 웹에서 renderNodeDestructive 에러 발생 → 일반 View 사용 (테마 전환 시 애니메이션 없음)
 import { Ionicons } from '@expo/vector-icons';
 import { Dimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
@@ -29,11 +29,18 @@ import { AppColors } from '../../constants/theme-colors';
 import { supabase } from '../../lib/supabase';
 import { sendLocalNotification } from '../../lib/notifications';
 import { getAIBusinessAdvice } from '../../lib/openai';
+import { isNumericColumn } from '../../../shared/excel-utils';
 
 const LAST_CONFIRM_KEY = 'lastConfirmTimestamp';
 function formatLastConfirmTime(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 모바일 안전 렌더링: 숫자에 콤마 + 단위(개) */
+function formatCount(n: number): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '0개';
+  return `${Math.floor(n).toLocaleString()}개`;
 }
 
 // 재고 아이템 타입
@@ -78,11 +85,12 @@ const GRADIENT_COLORS = [
 
 // 재고 상태 (웹과 동일 3단계)
 type StockStatus = '부족' | '주의' | '여유';
-function getStockStatus(item: InventoryItem): StockStatus | null {
+function getStockStatus(item: InventoryItem | null | undefined): StockStatus | null {
+  if (!item) return null;
   const base = item.base_stock ?? 0;
   if (base <= 0) return null;
-  const cur = item.currentStock;
-  if (cur < base) return '부족';
+  const cur = item.currentStock ?? 0;
+  if (Number(cur) < base) return '부족';
   if (Math.abs(cur - base) < 0.01) return '주의';
   return '여유';
 }
@@ -96,7 +104,7 @@ const STOCK_STATUS_STYLES: Record<StockStatus, { dot: string; bg: string; text: 
 function StockStatusDisplay({ item }: { item: InventoryItem }) {
   const status = getStockStatus(item);
   const statusStyles = status ? STOCK_STATUS_STYLES[status] : null;
-  const valueText = `${item.currentStock.toLocaleString()}개`;
+  const valueText = `${(item?.currentStock ?? 0).toLocaleString()}개`;
 
   return (
     <View
@@ -132,21 +140,69 @@ function StockStatusDisplay({ item }: { item: InventoryItem }) {
   );
 }
 
-// 컬럼명 매칭 함수
-function findColumnValue(data: Record<string, unknown>, keywords: string[]): unknown {
-  for (const key of Object.keys(data)) {
-    const normalizedKey = key.toLowerCase().replace(/\s/g, '');
-    for (const keyword of keywords) {
-      if (normalizedKey.includes(keyword.toLowerCase())) {
-        return data[key];
-      }
+/** 컬럼명 매칭 - 키워드 우선순위 적용 (구체적→일반). ID 컬럼 제외 */
+function findColumnValue(data: Record<string, unknown> | null | undefined, keywords: string[]): unknown {
+  if (!data || typeof data !== 'object') return null;
+  const keys = Object.keys(data).filter(k => k.toLowerCase() !== 'id');
+  for (const keyword of keywords) {
+    const kw = keyword.toLowerCase().replace(/\s/g, '');
+    for (const key of keys) {
+      const normalizedKey = key.toLowerCase().replace(/\s/g, '');
+      if (normalizedKey.includes(kw)) return data[key];
     }
   }
   return null;
 }
 
+/** 현재 재고(수량) 전용 - 금액/세금/기준 열 제외 (수십억 버그 방지) */
+function findCurrentStockValue(data: Record<string, unknown> | null | undefined): number {
+  if (!data || typeof data !== 'object') return 0;
+  const excludePatterns = ['기준', '금액', '세', '원가', '합계', '총', 'amount', 'sum', 'total', 'tax'];
+  const keys = Object.keys(data).filter(k => {
+    const lower = k.toLowerCase().replace(/\s/g, '');
+    if (lower === 'id') return false;
+    return !excludePatterns.some(p => lower.includes(p));
+  });
+  const keywords = ['현재재고', '현재 재고', '수량', 'stock', 'quantity', 'qty'];
+  for (const keyword of keywords) {
+    const kw = keyword.toLowerCase().replace(/\s/g, '');
+    for (const key of keys) {
+      const normalizedKey = key.toLowerCase().replace(/\s/g, '');
+      if (normalizedKey.includes(kw)) {
+        const v = data[key];
+        const n = typeof v === 'number' ? v : (typeof v === 'string' ? parseFloat(v.replace(/,/g, '')) : NaN);
+        return (!isNaN(n) && n >= 0 && n <= 999999999) ? n : 0;
+      }
+    }
+  }
+  return 0;
+}
+
+/** 단가 전용 - 금액/합계 열 제외 (수십억 버그 방지) */
+function findUnitPriceValue(data: Record<string, unknown> | null | undefined): number {
+  const v = findColumnValue(data, ['단가', '가격', 'price', 'unit_price']);
+  const n = typeof v === 'number' ? v : (typeof v === 'string' ? parseFloat(String(v).replace(/,/g, '')) : NaN);
+  if (!isNaN(n) && n >= 0 && n <= 999999) return n;
+  return 1000;
+}
+
+// 규격 찾기
+function findSpec(data: Record<string, unknown> | null | undefined): string {
+  if (!data || typeof data !== 'object') return '-';
+  const v = findColumnValue(data, ['규격', '스펙', 'spec', '규격사항']);
+  return v != null && String(v).trim() ? String(v).trim() : '-';
+}
+
+// 단위 찾기
+function findUnit(data: Record<string, unknown> | null | undefined): string {
+  if (!data || typeof data !== 'object') return '-';
+  const v = findColumnValue(data, ['단위', 'unit', 'uom']);
+  return v != null && String(v).trim() ? String(v).trim() : '-';
+}
+
 // 품목명 찾기 (더 유연한 로직)
-function findItemName(data: Record<string, unknown>, rowIndex: number): string {
+function findItemName(data: Record<string, unknown> | null | undefined, rowIndex: number): string {
+  if (!data || typeof data !== 'object') return `품목 ${rowIndex + 1}`;
   // 1. 기존 키워드로 찾기
   const keywords = ['품목', '품목명', '상품명', '제품명', '이름', '항목', 'name', 'item', 'product'];
   const keywordMatch = findColumnValue(data, keywords);
@@ -185,17 +241,7 @@ function findItemName(data: Record<string, unknown>, rowIndex: number): string {
 export default function HomeScreen() {
   const { isDark } = useAppTheme();
   const colors = AppColors[isDark ? 'dark' : 'light'];
-  const themeTransition = useSharedValue(isDark ? 1 : 0);
-  useEffect(() => {
-    themeTransition.value = withTiming(isDark ? 1 : 0, { duration: 400 });
-  }, [isDark]);
-  const animatedBgStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(
-      themeTransition.value,
-      [0, 1],
-      [AppColors.light.background, AppColors.dark.background]
-    ),
-  }));
+  const containerBg = { backgroundColor: colors.background };
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [fileGroups, setFileGroups] = useState<FileGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -223,6 +269,7 @@ export default function HomeScreen() {
   // 마지막 확정 시간 (앱 메인 대시보드 표시용)
   const [lastConfirmedAt, setLastConfirmedAt] = useState<string | null>(null);
   const lastConfirmHighlight = useRef(new Animated.Value(0)).current;
+  const [bulkConfirming, setBulkConfirming] = useState(false);
   
   // AI 경영 한마디 관련 state
   const [aiAdvice, setAiAdvice] = useState<string>('');
@@ -311,23 +358,16 @@ export default function HomeScreen() {
         // 품목명 찾기 (개선된 로직)
         const itemName = findItemName(rowData, row.row_index);
         
-        // 현재 재고 찾기
-        const currentStock = Number(
-          findColumnValue(rowData, ['현재재고', '현재 재고', '재고', '수량', 'stock', 'quantity', 'qty']) 
-          || 0
-        );
+        // 현재 재고 찾기 - 수량 열만 참조 (금액/세금 열 제외)
+        const currentStock = findCurrentStockValue(rowData);
         
         const baseStock = row.base_stock || 0;
         // base_stock이 설정된 경우에만 재고 부족 체크
         const isLowStock = baseStock > 0 && currentStock < baseStock;
-        const shortage = isLowStock ? baseStock - currentStock : 0;
+        const shortage = isLowStock ? Math.min(baseStock - currentStock, 999999) : 0;
 
-        // 단가 (발주 예산 계산용) - 없으면 1,000원
-        const unitPriceRaw = findColumnValue(rowData, ['단가', '가격', 'price', 'unit_price', '금액', '원가']);
-        const unitPrice = typeof unitPriceRaw === 'number' && unitPriceRaw >= 0
-          ? unitPriceRaw
-          : (typeof unitPriceRaw === 'string' ? parseFloat(unitPriceRaw.replace(/,/g, '')) : NaN);
-        const unitPriceFinal = !isNaN(unitPrice) && unitPrice >= 0 ? unitPrice : 1000;
+        // 단가 (발주 예산 계산용) - 금액/합계 열 제외, 없으면 1,000원
+        const unitPriceFinal = findUnitPriceValue(rowData);
 
         // 유통기한 계산
         let daysUntilExpiry: number | null = null;
@@ -429,6 +469,61 @@ export default function HomeScreen() {
     stopSpinAnimation();
   }, [fetchInventory]);
 
+  // 전체 확정: 미확정 행의 base_stock을 현재 재고로 설정, State 즉시 업데이트
+  const handleBulkConfirm = useCallback(async () => {
+    const unconfirmed = inventory.filter(item => !item.base_stock || item.base_stock === 0);
+    if (unconfirmed.length === 0) {
+      Alert.alert('알림', '확정할 미확정 품목이 없습니다.');
+      return;
+    }
+    Alert.alert(
+      '전체 확정',
+      `미확정 ${unconfirmed.length}개 품목을 현재 재고 기준으로 확정하시겠습니까?`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '확정',
+          onPress: async () => {
+            setBulkConfirming(true);
+            try {
+              for (const item of unconfirmed) {
+                await supabase
+                  .from('재고')
+                  .update({ base_stock: item.currentStock })
+                  .eq('id', item.id);
+              }
+              const now = new Date().toISOString();
+              setLastConfirmedAt(now);
+              AsyncStorage.setItem(LAST_CONFIRM_KEY, now).catch(() => {});
+              lastConfirmHighlight.setValue(1);
+              Animated.timing(lastConfirmHighlight, { toValue: 0, duration: 600, useNativeDriver: true }).start();
+              setInventory(prev => prev.map(p => {
+                if (!p.base_stock || p.base_stock === 0) {
+                  return { ...p, base_stock: p.currentStock };
+                }
+                return p;
+              }));
+              setFileGroups(prev => prev.map(g => ({
+                ...g,
+                items: g.items.map(i => (!i.base_stock || i.base_stock === 0) ? { ...i, base_stock: i.currentStock } : i),
+                lowStockCount: g.items.filter(i => {
+                  const base = (!i.base_stock || i.base_stock === 0) ? i.currentStock : i.base_stock;
+                  return base > 0 && (i.currentStock ?? 0) < base;
+                }).length,
+                hasConfirmed: true,
+              })));
+              Alert.alert('완료', `${formatCount(unconfirmed.length)} 품목이 확정되었습니다.`);
+            } catch (err) {
+              Alert.alert('오류', err instanceof Error ? err.message : '전체 확정에 실패했습니다.');
+            } finally {
+              setBulkConfirming(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [inventory]);
+
   // 수정 모달 열기
   const openEditModal = (item: InventoryItem) => {
     setSelectedItem(item);
@@ -447,15 +542,20 @@ export default function HomeScreen() {
     setEditExpiryDate('');
   };
 
-  // 현재 재고 컬럼 키 찾기
+  // 현재 재고 컬럼 키 찾기 - 금액/기준 열 제외 (수량 열만)
   const findStockColumnKey = (data: Record<string, unknown>): string | null => {
-    const keywords = ['현재재고', '현재 재고', '재고', '수량', 'stock', 'quantity', 'qty'];
-    for (const key of Object.keys(data)) {
-      const normalizedKey = key.toLowerCase().replace(/\s/g, '');
-      for (const keyword of keywords) {
-        if (normalizedKey.includes(keyword.toLowerCase())) {
-          return key;
-        }
+    const excludePatterns = ['기준', '금액', '세', '원가', '합계', '총', 'amount', 'sum', 'total', 'tax'];
+    const keys = Object.keys(data).filter(k => {
+      const lower = k.toLowerCase().replace(/\s/g, '');
+      if (lower === 'id') return false;
+      return !excludePatterns.some(p => lower.includes(p));
+    });
+    const keywords = ['현재재고', '현재 재고', '수량', 'stock', 'quantity', 'qty'];
+    for (const keyword of keywords) {
+      const kw = keyword.toLowerCase().replace(/\s/g, '');
+      for (const key of keys) {
+        const normalizedKey = key.toLowerCase().replace(/\s/g, '');
+        if (normalizedKey.includes(kw)) return key;
       }
     }
     return null;
@@ -648,13 +748,13 @@ export default function HomeScreen() {
               {item.lowStockCount > 0 && (
                 <View style={styles.fileCardAlertBadge}>
                   <Ionicons name="warning" size={12} color="#fff" />
-                  <Text style={styles.fileCardAlertBadgeText}>{item.lowStockCount}</Text>
+                  <Text style={styles.fileCardAlertBadgeText}>{item.lowStockCount.toLocaleString()}</Text>
                 </View>
               )}
               {item.expiringCount > 0 && (
                 <View style={styles.fileCardExpiringBadge}>
                   <Ionicons name="time" size={12} color="#fff" />
-                  <Text style={styles.fileCardExpiringBadgeText}>{item.expiringCount}</Text>
+                  <Text style={styles.fileCardExpiringBadgeText}>{item.expiringCount.toLocaleString()}</Text>
                 </View>
               )}
             </View>
@@ -667,29 +767,29 @@ export default function HomeScreen() {
   // 재고 아이템 렌더링 (상세 화면)
   const renderItem = ({ item }: { item: InventoryItem }) => (
     <View style={[
-      styles.itemCard, 
-      item.isLowStock && styles.lowStockCard,
-      item.isExpired && styles.expiredCard,
-      item.isExpiringSoon && !item.isExpired && styles.expiringSoonCard,
+      styles.itemCard,
+      item?.isLowStock && styles.lowStockCard,
+      item?.isExpired && styles.expiredCard,
+      item?.isExpiringSoon && !item?.isExpired && styles.expiringSoonCard,
     ]}>
       <View style={styles.itemHeader}>
         <Text style={styles.itemName} numberOfLines={1}>
-          {item.itemName}
+          {item?.itemName ?? '-'}
         </Text>
         <View style={styles.headerRight}>
-          {item.isExpired && (
+          {item?.isExpired && (
             <View style={styles.expiredBadge}>
               <Ionicons name="skull" size={14} color="#fff" />
               <Text style={styles.expiredBadgeText}>폐기</Text>
             </View>
           )}
-          {item.isExpiringSoon && !item.isExpired && (
+          {item?.isExpiringSoon && !item?.isExpired && (
             <View style={styles.expiringSoonBadge}>
               <Ionicons name="time" size={14} color="#92400e" />
               <Text style={styles.expiringSoonBadgeText}>폐기 임박</Text>
             </View>
           )}
-          {item.isLowStock && (
+          {item?.isLowStock && (
             <View style={styles.alertBadge}>
               <Ionicons name="warning" size={16} color="#fff" />
               <Text style={styles.alertBadgeText}>재고 부족</Text>
@@ -716,11 +816,11 @@ export default function HomeScreen() {
         <View style={styles.stockColumn}>
           <Text style={styles.stockLabel}>기준 재고</Text>
           <Text style={styles.stockValue}>
-            {(item.base_stock || 0).toLocaleString()}개
+            {(item?.base_stock ?? 0).toLocaleString()}개
           </Text>
         </View>
         
-        {item.expiry_date && (
+        {item?.expiry_date != null && item.expiry_date !== '' && (
           <>
             <View style={styles.stockDivider} />
             <View style={styles.stockColumn}>
@@ -728,24 +828,24 @@ export default function HomeScreen() {
               <Text style={[
                 styles.stockValue,
                 styles.expiryValue,
-                item.isExpired && styles.expiredValue,
-                item.isExpiringSoon && !item.isExpired && styles.expiringSoonValue,
+                item?.isExpired && styles.expiredValue,
+                item?.isExpiringSoon && !item?.isExpired && styles.expiringSoonValue,
               ]}>
-                {item.daysUntilExpiry !== null && item.daysUntilExpiry <= 0 
-                  ? '만료' 
-                  : `D-${item.daysUntilExpiry}`}
+                {(item?.daysUntilExpiry ?? 0) <= 0
+                  ? '만료'
+                  : `D-${item?.daysUntilExpiry ?? '-'}`}
               </Text>
             </View>
           </>
         )}
         
-        {item.isLowStock && !item.expiry_date && (
+        {item?.isLowStock && !item?.expiry_date && (
           <>
             <View style={styles.stockDivider} />
             <View style={styles.stockColumn}>
               <Text style={styles.stockLabel}>부족량</Text>
               <Text style={styles.shortageValue}>
-                -{item.shortage.toLocaleString()}개
+                -{(item?.shortage ?? 0).toLocaleString()}개
               </Text>
             </View>
           </>
@@ -753,7 +853,7 @@ export default function HomeScreen() {
       </View>
 
       {/* 유통기한 임박/만료 경고 */}
-      {item.isExpired && (
+      {item?.isExpired && (
         <View style={styles.expiredMessage}>
           <Ionicons name="skull" size={18} color="#7f1d1d" />
           <Text style={styles.expiredText}>
@@ -802,14 +902,15 @@ export default function HomeScreen() {
   });
 
   // 📁 상세 화면 품목 필터링 (검색 + 퀵 필터 연동)
-  const filteredDetailItems = selectedFileGroup?.items.filter(item => {
-    const matchesSearch = detailSearchQuery === '' || 
-      item.itemName.toLowerCase().includes(detailSearchQuery.toLowerCase());
+  const filteredDetailItems = (selectedFileGroup?.items ?? []).filter(item => {
+    const itemName = item?.itemName ?? '';
+    const matchesSearch = detailSearchQuery === '' ||
+      String(itemName).toLowerCase().includes(detailSearchQuery.toLowerCase());
     if (!matchesSearch) return false;
-    if (quickFilter === '부족') return item.isLowStock;
-    if (quickFilter === '확정완료') return item.base_stock !== null && item.base_stock > 0;
+    if (quickFilter === '부족') return !!item?.isLowStock;
+    if (quickFilter === '확정완료') return (item?.base_stock != null) && (item.base_stock ?? 0) > 0;
     return true;
-  }) || [];
+  });
 
   // 통계 정보 (전체 기준)
   const totalItems = inventory.length;
@@ -818,8 +919,11 @@ export default function HomeScreen() {
   const lowStockList = inventory.filter(item => item.isLowStock);
   const expiringItems = inventory.filter(item => item.isExpiringSoon || item.isExpired).length;
 
-  // 총 예상 발주 비용 (부족 수량 × 단가 합계)
-  const totalOrderBudget = lowStockList.reduce((sum, item) => sum + item.shortage * item.unitPrice, 0);
+  // 총 예상 발주 비용 (부족 수량 × 단가) - 행 단위 합산, 상한 적용
+  const totalOrderBudget = Math.min(
+    lowStockList.reduce((sum, item) => sum + item.shortage * item.unitPrice, 0),
+    999999999999
+  );
 
   // 앱 포그라운드 시 데이터 새로고침 (웹 수정 시 실시간 반영)
   useEffect(() => {
@@ -872,31 +976,29 @@ ${orderItems}
     }
   };
 
-  // AI 재고 요약 생성
+  // AI 재고 요약 생성 - 행(Row) 단위 카운트만 사용 (열 합산 금지)
   const generateAISummary = useCallback(() => {
     if (inventory.length === 0) {
       return "재고 데이터가 없습니다. 웹에서 재고를 등록해주세요.";
     }
 
-    const lowStockList = inventory.filter(item => item.isLowStock);
+    const lowStockRowCount = inventory.filter(item => item.isLowStock).length;
     
-    if (lowStockList.length === 0) {
-      return `총 ${totalItems}개 품목의 재고가 모두 안정적입니다. 현재 발주가 필요한 품목이 없어요! 👍`;
+    if (lowStockRowCount === 0) {
+      return `총 ${formatCount(totalItems)} 품목의 재고가 모두 안정적입니다. 현재 발주가 필요한 품목이 없어요! 👍`;
     }
 
-    // 가장 부족한 품목 찾기
+    const lowStockList = inventory.filter(item => item.isLowStock);
     const mostShortage = lowStockList.reduce((prev, current) => 
       (current.shortage > prev.shortage) ? current : prev
     );
-
-    // 총 부족량 계산
     const totalShortage = lowStockList.reduce((sum, item) => sum + item.shortage, 0);
 
-    if (lowStockList.length === 1) {
-      return `⚠️ "${mostShortage.itemName}" 품목이 기준 재고보다 ${mostShortage.shortage}개 부족합니다. 발주를 진행해주세요!`;
+    if (lowStockRowCount === 1) {
+      return `⚠️ "${mostShortage.itemName}" 품목이 기준 재고보다 ${formatCount(mostShortage.shortage)} 부족합니다. 발주를 진행해주세요!`;
     }
 
-    return `⚠️ ${lowStockList.length}개 품목에서 재고 부족이 감지되었습니다. 가장 부족한 품목은 "${mostShortage.itemName}"(${mostShortage.shortage}개 부족)이며, 총 ${totalShortage}개의 발주가 필요합니다.`;
+    return `⚠️ ${formatCount(lowStockRowCount)} 품목에서 재고 부족이 감지되었습니다. 가장 부족한 품목은 "${mostShortage.itemName}"(${formatCount(mostShortage.shortage)} 부족)이며, 총 ${formatCount(totalShortage)} 발주가 필요합니다.`;
   }, [inventory, totalItems]);
 
   // AI 경영 한마디 가져오기
@@ -1068,7 +1170,7 @@ ${orderItems}
         <View>
           <Text style={[styles.headerTitle, { color: colors.text }]}>재고 현황</Text>
           <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            {totalFiles}개 파일 · 총 {totalItems}개 품목
+            {totalFiles.toLocaleString()}개 파일 · 총 {totalItems.toLocaleString()}개 품목
           </Text>
         </View>
         <View style={styles.headerButtons}>
@@ -1138,14 +1240,19 @@ ${orderItems}
           )}
         </View>
 
-        {/* 퀵 필터 칩 */}
-        <View style={styles.quickFilterRow}>
+        {/* 퀵 필터 칩 - 가로 스크롤, 모바일 최적화 */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.quickFilterScrollContent}
+          style={styles.quickFilterScroll}
+        >
           <TouchableOpacity
             style={[styles.quickFilterChip, quickFilter === '전체' && styles.quickFilterChipActive]}
             onPress={() => setQuickFilter('전체')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.quickFilterChipText, quickFilter === '전체' && styles.quickFilterChipTextActive]}>
+            <Text style={[styles.quickFilterChipText, quickFilter === '전체' && styles.quickFilterChipTextActive]} numberOfLines={1}>
               전체
             </Text>
           </TouchableOpacity>
@@ -1160,7 +1267,7 @@ ${orderItems}
             <Text style={[
               styles.quickFilterChipText, 
               quickFilter === '부족' && styles.quickFilterChipTextDanger
-            ]}>
+            ]} numberOfLines={1}>
               부족
             </Text>
           </TouchableOpacity>
@@ -1175,18 +1282,29 @@ ${orderItems}
             <Text style={[
               styles.quickFilterChipText, 
               quickFilter === '확정완료' && styles.quickFilterChipTextSuccess
-            ]}>
+            ]} numberOfLines={1}>
               확정 완료
             </Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </View>
 
       {/* 모바일 전용 재고 현황 대시보드 (2x2 그리드) */}
       <View style={[styles.dashboardSection, { backgroundColor: colors.surfaceCard, borderColor: colors.border }]}>
         <View style={styles.dashboardHeaderRow}>
           <Text style={[styles.dashboardSectionTitle, { color: colors.text }]}>재고 현황 대시보드</Text>
-          {lastConfirmedAt && (
+          <View style={styles.dashboardHeaderActions}>
+            {unconfirmedCount > 0 && (
+              <TouchableOpacity
+                onPress={handleBulkConfirm}
+                disabled={bulkConfirming}
+                style={[styles.bulkConfirmButton, { backgroundColor: colors.greenLight, borderColor: colors.greenBorder }]}
+              >
+                <Ionicons name="checkmark-done" size={16} color="#166534" />
+                <Text style={styles.bulkConfirmButtonText}>전체 확정</Text>
+              </TouchableOpacity>
+            )}
+            {lastConfirmedAt && (
             <Animated.View
               style={[
                 styles.lastConfirmBadge,
@@ -1203,7 +1321,8 @@ ${orderItems}
                 마지막 업데이트: {formatLastConfirmTime(lastConfirmedAt)}
               </Text>
             </Animated.View>
-          )}
+            )}
+          </View>
         </View>
         <View style={styles.dashboardGrid}>
           <View style={styles.dashboardGridRow}>
@@ -1211,7 +1330,7 @@ ${orderItems}
             <View style={[styles.dashboardCard, { backgroundColor: colors.surfaceCard, borderColor: colors.border }]}>
               <Ionicons name="ellipse-outline" size={28} color="#6B7280" />
               <View style={styles.dashboardCardContent}>
-                <Text style={[styles.dashboardCardNumber, { color: colors.text }]}>{unconfirmedCount}</Text>
+                <Text style={[styles.dashboardCardNumber, { color: colors.text }]}>{formatCount(unconfirmedCount)}</Text>
                 <Text style={[styles.dashboardCardLabel, { color: colors.textSecondary }]}>미확정 품목</Text>
               </View>
             </View>
@@ -1232,7 +1351,7 @@ ${orderItems}
                     styles.dashboardCardNumber, 
                     lowStockItems > 0 && styles.dashboardCardNumberAlert
                   ]}>
-                    {lowStockItems}
+                    {formatCount(lowStockItems)}
                   </Text>
                   {lowStockItems > 0 && (
                     <View style={styles.supplyNeededBadge}>
@@ -1249,7 +1368,7 @@ ${orderItems}
             <View style={[styles.dashboardCard, { backgroundColor: colors.surfaceCard, borderColor: colors.border }]}>
               <Ionicons name="checkmark-circle" size={28} color="#16A34A" />
               <View style={styles.dashboardCardContent}>
-                <Text style={[styles.dashboardCardNumber, { color: '#16A34A' }]}>{confirmedCount}</Text>
+                <Text style={[styles.dashboardCardNumber, { color: '#16A34A' }]}>{formatCount(confirmedCount)}</Text>
                 <Text style={[styles.dashboardCardLabel, { color: colors.textSecondary }]}>최종 확정</Text>
               </View>
             </View>
@@ -1270,7 +1389,7 @@ ${orderItems}
                     styles.dashboardCardNumber, 
                     expiringItems > 0 && { color: '#D97706' }
                   ]}>
-                    {expiringItems}
+                    {formatCount(expiringItems)}
                   </Text>
                   {expiringItems > 0 && (
                     <View style={styles.supplyNeededBadge}>
@@ -1317,7 +1436,7 @@ ${orderItems}
           <Ionicons name="share-social" size={22} color="#FFFFFF" />
           <Text style={styles.shareButtonText}>발주 목록 공유</Text>
           <View style={styles.shareButtonBadge}>
-            <Text style={styles.shareButtonBadgeText}>{lowStockItems}</Text>
+            <Text style={styles.shareButtonBadgeText}>{lowStockItems.toLocaleString()}</Text>
           </View>
         </TouchableOpacity>
       )}
@@ -1498,7 +1617,7 @@ ${orderItems}
   };
 
   return (
-    <Reanimated.View style={[styles.container, animatedBgStyle]}>
+    <View style={[styles.container, containerBg]}>
       {/* 재고 리스트 - FlatList 하나로 통합 */}
       {/* 📁 파일 리스트 (메인 화면) - 2열 그리드 */}
       
@@ -1508,7 +1627,9 @@ ${orderItems}
           <View style={styles.budgetSummaryContent}>
             <View style={styles.budgetSummaryLeft}>
               <Text style={styles.budgetSummaryLabel}>총 예상 발주 비용</Text>
-              <Text style={styles.budgetSummaryAmount}>₩{totalOrderBudget.toLocaleString()}</Text>
+              <Text style={styles.budgetSummaryAmount} numberOfLines={1} adjustsFontSizeToFit>
+                ₩{totalOrderBudget.toLocaleString()}
+              </Text>
             </View>
             <View style={styles.budgetSummaryButtons}>
               <TouchableOpacity
@@ -1684,7 +1805,7 @@ ${orderItems}
             >
               <View style={styles.detailDashboardCard}>
                 <Text style={styles.detailDashboardNumber}>
-                  {selectedFileGroup.items.filter(i => !i.base_stock || i.base_stock === 0).length}
+                  {formatCount(selectedFileGroup.items.filter(i => !i.base_stock || i.base_stock === 0).length)}
                 </Text>
                 <Text style={styles.detailDashboardLabel}>미확정</Text>
               </View>
@@ -1694,7 +1815,7 @@ ${orderItems}
                     styles.detailDashboardNumber, 
                     selectedFileGroup.lowStockCount > 0 && styles.detailDashboardNumberAlert
                   ]}>
-                    {selectedFileGroup.lowStockCount}
+                    {formatCount(selectedFileGroup.lowStockCount)}
                   </Text>
                   {selectedFileGroup.lowStockCount > 0 && (
                     <View style={styles.detailSupplyBadge}>
@@ -1706,7 +1827,7 @@ ${orderItems}
               </View>
               <View style={styles.detailDashboardCard}>
                 <Text style={[styles.detailDashboardNumber, { color: '#16A34A' }]}>
-                  {selectedFileGroup.items.filter(i => i.base_stock !== null && i.base_stock > 0).length}
+                  {formatCount(selectedFileGroup.items.filter(i => i.base_stock !== null && i.base_stock > 0).length)}
                 </Text>
                 <Text style={styles.detailDashboardLabel}>최종 확정</Text>
               </View>
@@ -1716,7 +1837,7 @@ ${orderItems}
                     styles.detailDashboardNumber, 
                     selectedFileGroup.expiringCount > 0 && { color: '#D97706' }
                   ]}>
-                    {selectedFileGroup.expiringCount}
+                    {formatCount(selectedFileGroup.expiringCount)}
                   </Text>
                   {selectedFileGroup.expiringCount > 0 && (
                     <View style={styles.detailSupplyBadge}>
@@ -1748,117 +1869,118 @@ ${orderItems}
               )}
             </View>
             <Text style={styles.detailSearchCount}>
-              {filteredDetailItems.length}개 표시
+              {filteredDetailItems.length.toLocaleString()}개 표시
             </Text>
           </View>
 
-          {/* 테이블 헤더 */}
-          <View style={styles.detailTableHeader}>
-            <Text style={[styles.detailTableHeaderText, { flex: 2 }]}>품목명</Text>
-            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>현재</Text>
-            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>기준</Text>
-            <Text style={[styles.detailTableHeaderText, { flex: 1, textAlign: 'center' }]}>상태</Text>
-          </View>
-
-          {/* 상세 품목 리스트 (테이블 형태) */}
-          <FlatList
-            data={filteredDetailItems}
-            renderItem={({ item, index }) => {
-              const stockStatus = getStockStatus(item);
-              const stockStyle = stockStatus ? STOCK_STATUS_STYLES[stockStatus] : null;
-              return (
-              <TouchableOpacity 
-                style={[
-                  styles.detailTableRow,
-                  index % 2 === 1 && styles.detailTableRowAlt,
-                  item.isLowStock && styles.detailTableRowAlert,
-                  item.isExpired && styles.detailTableRowExpired,
-                ]}
-                onPress={() => openEditModal(item)}
-                activeOpacity={0.7}
-              >
-                <View style={{ flex: 2 }}>
-                  <Text style={styles.detailTableItemName} numberOfLines={1}>
-                    {item.itemName}
-                  </Text>
-                  {item.expiry_date && (
-                    <Text style={[
-                      styles.detailTableItemExpiry,
-                      item.isExpired && { color: '#DC2626' },
-                      item.isExpiringSoon && { color: '#D97706' },
-                    ]}>
-                      {item.isExpired ? '만료됨' : `D-${item.daysUntilExpiry}`}
-                    </Text>
-                  )}
-                </View>
-                <View
-                  style={[
-                    styles.detailTableStockCell,
-                    stockStyle && {
-                      backgroundColor: stockStyle.bg,
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      borderRadius: 8,
-                      marginHorizontal: 4,
-                    },
-                  ]}
-                >
-                  {stockStatus && (
-                    <View
-                      style={[
-                        styles.detailTableStockDot,
-                        { backgroundColor: stockStyle!.dot },
-                      ]}
-                    />
-                  )}
-                  <Text
-                    style={[
-                      styles.detailTableCell,
-                      { flex: 1, textAlign: 'center' },
-                      stockStatus === '부족' && styles.detailTableCellShortage,
-                      stockStyle && { color: stockStyle.text },
-                    ]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                  >
-                    {item.currentStock.toLocaleString()}
-                  </Text>
-                </View>
-                <Text style={[styles.detailTableCell, { flex: 1, textAlign: 'center' }]}>
-                  {(item.base_stock || 0).toLocaleString()}
-                </Text>
-                <View style={{ flex: 1, alignItems: 'center' }}>
-                  {item.isExpired ? (
-                    <View style={styles.detailStatusBadgeExpired}>
-                      <Text style={styles.detailStatusBadgeExpiredText}>폐기</Text>
-                    </View>
-                  ) : item.isExpiringSoon ? (
-                    <View style={styles.detailStatusBadgeExpiring}>
-                      <Text style={styles.detailStatusBadgeExpiringText}>임박</Text>
-                    </View>
-                  ) : item.isLowStock ? (
-                    <View style={styles.detailStatusBadgeAlert}>
-                      <Text style={styles.detailStatusBadgeAlertText}>부족</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.detailStatusBadgeNormal}>
-                      <Text style={styles.detailStatusBadgeNormalText}>정상</Text>
-                    </View>
-                  )}
-                </View>
-              </TouchableOpacity>
-            );
-            }}
-            keyExtractor={(item) => `${item.id}`}
-            contentContainerStyle={styles.detailTableContent}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.detailEmptyContainer}>
-                <Ionicons name="search-outline" size={56} color="#D1D5DB" />
-                <Text style={styles.detailEmptyTitle}>검색 결과가 없습니다</Text>
+          {/* 테이블 - 고정 열 순서 [순번|품목명|규격|단위|현재재고|기준재고|상태] (기존/신규 데이터 공통) */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.detailTableScroll}>
+            <View style={[styles.detailTableWrapper, { minWidth: 44 + 7 * 88 }]}>
+              <View style={[styles.detailTableHeader, styles.detailTableHeaderSticky]}>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableColNo, styles.detailTableCellNum]}>순번</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>품목명</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>규격</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>단위</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol, styles.detailTableCellNum]}>현재재고</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol, styles.detailTableCellNum]}>기준재고</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableColStatus]}>상태</Text>
               </View>
-            }
-          />
+
+              <FlatList
+                data={filteredDetailItems}
+                renderItem={({ item, index }) => {
+                  const stockStatus = getStockStatus(item);
+                  const stockStyle = stockStatus ? STOCK_STATUS_STYLES[stockStatus] : null;
+                  const itemName = item?.itemName ?? '-';
+                  const spec = findSpec(item?.data);
+                  const unit = findUnit(item?.data);
+                  const currentStock = (item?.currentStock ?? 0);
+                  const baseStock = (item?.base_stock ?? 0);
+                  const isExpired = !!item?.isExpired;
+                  const isExpiringSoon = !!item?.isExpiringSoon;
+                  const isLowStock = !!item?.isLowStock;
+                  const daysUntilExpiry = item?.daysUntilExpiry;
+                  return (
+                    <TouchableOpacity
+                      style={[
+                        styles.detailTableRow,
+                        index % 2 === 1 && styles.detailTableRowAlt,
+                        isLowStock && styles.detailTableRowAlert,
+                        isExpired && styles.detailTableRowExpired,
+                      ]}
+                      onPress={() => openEditModal(item)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.detailTableCell, styles.detailTableColNo, styles.detailTableCellNum]}>
+                        {(index ?? 0) + 1}
+                      </Text>
+                      <View style={styles.detailTableCol}>
+                        <Text style={styles.detailTableItemName} numberOfLines={1}>{itemName}</Text>
+                        {item?.expiry_date != null && item.expiry_date !== '' && (
+                          <Text style={[
+                            styles.detailTableItemExpiry,
+                            isExpired && { color: '#DC2626' },
+                            isExpiringSoon && { color: '#D97706' },
+                          ]}>
+                            {isExpired ? '만료됨' : `D-${daysUntilExpiry ?? '-'}`}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={[styles.detailTableCell, styles.detailTableCol]} numberOfLines={1}>{spec}</Text>
+                      <Text style={[styles.detailTableCell, styles.detailTableCol]} numberOfLines={1}>{unit}</Text>
+                      <View style={[styles.detailTableStockCell, styles.detailTableCol]}>
+                        {stockStatus && (
+                          <View style={[styles.detailTableStockDot, stockStyle && { backgroundColor: stockStyle.dot }]} />
+                        )}
+                        <Text
+                          style={[
+                            styles.detailTableCell,
+                            styles.detailTableCellNum,
+                            stockStatus === '부족' && styles.detailTableCellShortage,
+                            stockStyle && { color: stockStyle.text },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {Number(currentStock).toLocaleString()}
+                        </Text>
+                      </View>
+                      <Text style={[styles.detailTableCell, styles.detailTableCol, styles.detailTableCellNum]}>
+                        {Number(baseStock).toLocaleString()}
+                      </Text>
+                      <View style={[styles.detailTableColStatus, { alignItems: 'center' }]}>
+                        {isExpired ? (
+                          <View style={styles.detailStatusBadgeExpired}>
+                            <Text style={styles.detailStatusBadgeExpiredText}>폐기</Text>
+                          </View>
+                        ) : isExpiringSoon ? (
+                          <View style={styles.detailStatusBadgeExpiring}>
+                            <Text style={styles.detailStatusBadgeExpiringText}>임박</Text>
+                          </View>
+                        ) : isLowStock ? (
+                          <View style={styles.detailStatusBadgeAlert}>
+                            <Text style={styles.detailStatusBadgeAlertText}>부족</Text>
+                          </View>
+                        ) : (
+                          <View style={styles.detailStatusBadgeNormal}>
+                            <Text style={styles.detailStatusBadgeNormalText}>정상</Text>
+                          </View>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+                keyExtractor={(item) => `${item?.id ?? ''}`}
+                contentContainerStyle={styles.detailTableContent}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={
+                  <View style={styles.detailEmptyContainer}>
+                    <Ionicons name="search-outline" size={56} color="#D1D5DB" />
+                    <Text style={styles.detailEmptyTitle}>검색 결과가 없습니다</Text>
+                  </View>
+                }
+              />
+            </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -1948,7 +2070,7 @@ ${orderItems}
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </Reanimated.View>
+    </View>
   );
 }
 
@@ -1999,7 +2121,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   budgetSummaryAmount: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '800',
     color: '#FCD34D',
     letterSpacing: -0.5,
@@ -2066,21 +2188,33 @@ const styles = StyleSheet.create({
   topSearchClearButton: {
     padding: 6,
   },
-  // 퀵 필터 칩 (손가락으로 누르기 편한 크기)
+  // 퀵 필터 칩 - 모바일 최적화 (가로 스크롤, 글자 겹침 방지)
+  quickFilterScroll: {
+    marginTop: 12,
+    maxHeight: 44,
+  },
+  quickFilterScrollContent: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
   quickFilterRow: {
     flexDirection: 'row',
     gap: 10,
     marginTop: 12,
   },
   quickFilterChip: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
     backgroundColor: '#F3F4F6',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    minHeight: 44,
+    minHeight: 36,
     justifyContent: 'center',
+    flexShrink: 0,
   },
   quickFilterChipActive: {
     backgroundColor: '#166534',
@@ -2095,7 +2229,7 @@ const styles = StyleSheet.create({
     borderColor: '#BBF7D0',
   },
   quickFilterChipText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
     color: '#6B7280',
   },
@@ -2195,7 +2329,8 @@ const styles = StyleSheet.create({
     marginTop: 16,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
-    padding: 20,
+    padding: 18,
+    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
@@ -2288,7 +2423,8 @@ const styles = StyleSheet.create({
     marginTop: 16,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
-    padding: 20,
+    padding: 18,
+    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
@@ -2301,9 +2437,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 10,
+    paddingVertical: 2,
   },
   dashboardSectionTitle: {
     fontSize: 20,
@@ -2323,6 +2460,25 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontWeight: '500',
   },
+  dashboardHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bulkConfirmButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  bulkConfirmButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#166534',
+  },
   dashboardGrid: {
     gap: 12,
   },
@@ -2333,12 +2489,13 @@ const styles = StyleSheet.create({
   },
   dashboardCard: {
     flex: 1,
-    minHeight: 110,
+    minHeight: 100,
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 18,
+    padding: 14,
+    paddingHorizontal: 12,
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 8,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
@@ -2357,12 +2514,15 @@ const styles = StyleSheet.create({
   },
   dashboardCardContent: {
     flex: 1,
+    gap: 4,
+    minWidth: 0,
   },
   dashboardCardNumber: {
-    fontSize: 36,
+    fontSize: 26,
     fontWeight: '800',
     color: '#111111',
     letterSpacing: -0.5,
+    lineHeight: 32,
   },
   dashboardCardNumberAlert: {
     color: '#DC2626',
@@ -2870,31 +3030,46 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontWeight: '500',
   },
-  // 테이블 헤더
+  // 테이블 헤더 (상단 고정)
   detailTableHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     backgroundColor: '#F8F9FA',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+  detailTableHeaderSticky: {
+    ...(Platform.OS === 'web' ? { position: 'sticky' as const, top: 0, zIndex: 10 } : {}),
+  },
   detailTableHeaderText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#6B7280',
     textTransform: 'uppercase',
   },
-  // 테이블 행
+  detailTableScroll: { maxHeight: '100%' },
+  detailTableWrapper: { flex: 1 },
+  detailTableColNo: { width: 44, minWidth: 44, paddingHorizontal: 4 },
+  detailTableCol: { width: 88, minWidth: 88, paddingHorizontal: 6 },
+  detailTableColStatus: { width: 56, minWidth: 56, paddingHorizontal: 4 },
+  detailColNo: { width: 36, flex: 0 },
+  detailColItemName: { flex: 2, minWidth: 80 },
+  detailColSpec: { flex: 1.2, minWidth: 60 },
+  detailColUnit: { flex: 0.6, minWidth: 40 },
+  detailColNum: { flex: 1, minWidth: 56, justifyContent: 'flex-end', textAlign: 'right' as const },
+  detailColStatus: { flex: 0.8, minWidth: 52 },
+  detailTableCellNum: { textAlign: 'right' as const, fontWeight: '700' as const },
+  // 테이블 행 (엑셀처럼 촘촘하게)
   detailTableContent: {
     paddingBottom: 40,
   },
   detailTableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',

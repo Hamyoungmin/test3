@@ -27,6 +27,7 @@ export default function RootLayout({
   return (
     <html lang="ko" suppressHydrationWarning>
       <head>
+        <meta name="style-version" content="2" />
         <script
           dangerouslySetInnerHTML={{
             __html: `(function(){var t=localStorage.getItem("app-theme");if(t==="dark")document.documentElement.classList.add("dark");else if(t==="light")document.documentElement.classList.remove("dark");})();`,

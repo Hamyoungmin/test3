@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { SheetData } from '@/types/excel';
+import { isNumericColumn, formatCellValue, getDisplayHeaders } from '@shared/excel-utils';
 
 interface DataTableProps {
   data: SheetData;
@@ -14,8 +15,9 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
   const [sortColumn, setSortColumn] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const rowsPerPage = 10;
+  const displayHeaders = getDisplayHeaders(data.headers);
 
-  // 검색 및 정렬된 데이터
+  // 검색 및 정렬된 데이터 (ID 컬럼 비노출)
   const filteredAndSortedData = useMemo(() => {
     let result = [...data.rows];
 
@@ -28,26 +30,30 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
       );
     }
 
-    // 정렬
+    // 정렬 (displayHeaders 기준 인덱스 → 원본 컬럼 인덱스 매핑)
     if (sortColumn !== null) {
-      result.sort((a, b) => {
-        const aVal = a[sortColumn] ?? '';
-        const bVal = b[sortColumn] ?? '';
+      const header = displayHeaders[sortColumn];
+      const origIndex = header != null ? data.headers.indexOf(header) : -1;
+      if (origIndex >= 0) {
+        result.sort((a, b) => {
+          const aVal = a[origIndex] ?? '';
+          const bVal = b[origIndex] ?? '';
 
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-        }
+          if (typeof aVal === 'number' && typeof bVal === 'number') {
+            return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+          }
 
-        const aStr = String(aVal);
-        const bStr = String(bVal);
-        return sortDirection === 'asc'
-          ? aStr.localeCompare(bStr)
-          : bStr.localeCompare(aStr);
-      });
+          const aStr = String(aVal);
+          const bStr = String(bVal);
+          return sortDirection === 'asc'
+            ? aStr.localeCompare(bStr)
+            : bStr.localeCompare(aStr);
+        });
+      }
     }
 
     return result;
-  }, [data.rows, searchTerm, sortColumn, sortDirection]);
+  }, [data.rows, data.headers, searchTerm, sortColumn, sortDirection, displayHeaders]);
 
   // 페이지네이션
   const totalPages = Math.ceil(filteredAndSortedData.length / rowsPerPage);
@@ -72,8 +78,10 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          headers: data.headers,
-          rows: filteredAndSortedData,
+          headers: displayHeaders,
+          rows: filteredAndSortedData.map((row) =>
+            displayHeaders.map((h) => row[data.headers.indexOf(h)] ?? null)
+          ),
           fileName: `${sheetName}_export`,
         }),
       });
@@ -156,19 +164,19 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-slate-50 dark:bg-slate-900/50">
+      {/* Table - Dense, overflow-x for 반응형, 엑셀 스타일 격자 */}
+      <div className="overflow-x-auto min-w-0" data-table-dense="true" data-excel-grid="true">
+        <table className="w-full min-w-[600px] border-collapse">
+          <thead className="sticky top-0 z-10 table-excel-header">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider w-12">
+              <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider w-11">
                 #
               </th>
-              {data.headers.map((header, index) => (
+              {displayHeaders.map((header, index) => (
                 <th
                   key={index}
                   onClick={() => handleSort(index)}
-                  className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  className={`px-2 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${isNumericColumn(header) ? 'text-right' : 'text-left'}`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="truncate max-w-[150px]">{header}</span>
@@ -194,11 +202,11 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+          <tbody>
             {paginatedData.length === 0 ? (
               <tr>
                 <td
-                  colSpan={data.headers.length + 1}
+                  colSpan={displayHeaders.length + 1}
                   className="px-4 py-12 text-center text-slate-500 dark:text-slate-400"
                 >
                   데이터가 없습니다.
@@ -210,19 +218,24 @@ export default function DataTable({ data, sheetName }: DataTableProps) {
                   key={rowIndex}
                   className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
                 >
-                  <td className="px-4 py-3 text-sm text-slate-400 dark:text-slate-500">
+                  <td className="px-2 py-2 text-xs text-slate-400 dark:text-slate-500 font-mono font-semibold text-right">
                     {startIndex + rowIndex + 1}
                   </td>
-                  {row.map((cell, cellIndex) => (
-                    <td
-                      key={cellIndex}
-                      className="px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
-                    >
-                      <span className="block truncate max-w-[200px]" title={String(cell ?? '')}>
-                        {cell !== null && cell !== undefined ? String(cell) : '-'}
-                      </span>
-                    </td>
-                  ))}
+                  {displayHeaders.map((header, cellIndex) => {
+                    const origIndex = data.headers.indexOf(header);
+                    const cell = origIndex >= 0 ? row[origIndex] : null;
+                    const isNum = isNumericColumn(header);
+                    return (
+                      <td
+                        key={header}
+                        className={`px-2 py-2 text-sm text-slate-700 dark:text-slate-200 ${isNum ? 'text-right font-bold table-numeric-cell' : ''}`}
+                      >
+                        <span className="block truncate max-w-[200px]" title={formatCellValue(cell)}>
+                          {formatCellValue(cell)}
+                        </span>
+                      </td>
+                    );
+                  })}
                 </tr>
               ))
             )}

@@ -7,6 +7,7 @@ import { Package, AlertTriangle, CheckCircle, Banknote, Clock } from 'lucide-rea
 import { supabase } from '@/lib/supabase';
 import { useDragScroll } from '@/hooks/useDragScroll';
 import AIBriefing from '@/components/AIBriefing';
+import { getDisplayHeaders } from '@shared/excel-utils';
 
 type CellValue = string | number | boolean | null;
 type RowData = Record<string, CellValue> & { 
@@ -779,9 +780,9 @@ export default function EditPage() {
           }
         });
 
-        // 헤더 구성: id + data 필드의 모든 키 (엑셀 컬럼 그대로)
+        // 헤더 구성: data 필드의 모든 키 (엑셀 컬럼 그대로, id는 DB용으로만 유지·UI 비노출)
         const dataHeaders = Array.from(allDataKeys);
-        const sortedHeaders = ['id', ...dataHeaders];
+        const sortedHeaders = [...dataHeaders];
         
         // 데이터 변환: data 필드 내용을 펼쳐서 평탄화 (엑셀처럼 보이도록)
         const flattenedData: RowData[] = uniqueData.map(item => {
@@ -1428,7 +1429,7 @@ export default function EditPage() {
 
   // 컬럼 너비 계산
   const getColumnWidth = (header: string) => {
-    if (header === 'id') return 60;
+    if (header.toLowerCase() === 'id') return 0;
     const maxLen = Math.max(
       header.length,
       ...data.slice(0, 50).map(row => String(row[header] ?? '').length)
@@ -1794,16 +1795,16 @@ export default function EditPage() {
         </div>
       )}
 
-      {/* Grid Editor - LTR 정렬 + 드래그 스크롤 */}
+      {/* Grid Editor - LTR 정렬 + 드래그 스크롤, 모바일 가로 스크롤 */}
       <div 
-        className={`w-full overflow-x-auto overflow-y-auto bg-white ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`w-full min-w-0 overflow-x-auto overflow-y-auto bg-white ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        style={{ WebkitOverflowScrolling: 'touch', maxHeight: 'calc(100vh - 200px)' }}
         ref={(el) => {
           // 두 ref를 모두 연결
           (tableRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
           (dragScrollRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
         }}
         dir="ltr"
-        style={{ maxHeight: 'calc(100vh - 200px)' }}
       >
         {data.length === 0 && headers.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-[500px]">
@@ -1818,15 +1819,15 @@ export default function EditPage() {
             </Link>
           </div>
         ) : (
-          <table className="border-collapse text-left" style={{ minWidth: Math.max(headers.reduce((sum, h) => sum + getColumnWidth(h), 0) + 50 + 112 + 128, 800) }}>
-            {/* Header */}
+          <table className="border-collapse text-left" data-excel-grid="true" style={{ minWidth: Math.max(getDisplayHeaders(headers).reduce((sum, h) => sum + getColumnWidth(h), 0) + 50 + 112 + 128, 800) }}>
+            {/* Header (ID 컬럼 UI 비노출) - 엑셀 스타일 제목줄 */}
             <thead className="sticky top-0 z-10">
-              <tr className="bg-gray-50">
+              <tr>
                 {/* 액션 컬럼 */}
                 <th className="w-14 px-1 py-3 text-center text-xs font-semibold text-gray-500 border border-gray-200 bg-gray-50 sticky left-0 z-20">
                   
                 </th>
-                {headers.map((header) => {
+                {getDisplayHeaders(headers).map((header) => {
                   const isSorted = sortConfig.column === header;
                   const sortDirection = isSorted ? sortConfig.direction : null;
                   
@@ -1836,11 +1837,9 @@ export default function EditPage() {
                       onClick={() => handleSort(header)}
                       style={{ width: getColumnWidth(header), minWidth: getColumnWidth(header) }}
                       className={`px-2 py-3 text-left text-xs font-semibold uppercase tracking-wider border border-gray-200 cursor-pointer select-none transition-colors group ${
-                        header === 'id' 
-                          ? 'text-gray-500 bg-gray-100 hover:bg-gray-200' 
-                          : isSorted 
-                            ? 'text-violet-700 bg-violet-50' 
-                            : 'text-gray-600 bg-gray-50 hover:bg-gray-100'
+                        isSorted 
+                          ? 'text-violet-700 bg-violet-50' 
+                          : 'text-gray-600 bg-gray-50 hover:bg-gray-100'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1">
@@ -1987,34 +1986,21 @@ export default function EditPage() {
                   </td>
 
                   {/* 데이터 셀 */}
-                  {headers.map((header) => {
+                  {getDisplayHeaders(headers).map((header) => {
                     const isEditing = editingCell?.rowId === row.id && editingCell?.column === header;
-                    const isIdColumn = header === 'id';
 
                     return (
                       <td
                         key={header}
                         style={{ width: getColumnWidth(header), minWidth: getColumnWidth(header) }}
                         className={`
-                          p-0 border border-gray-100 text-sm
-                          ${isIdColumn ? 'text-gray-500 bg-gray-50' : 'text-gray-700'}
+                          p-0 border border-gray-100 text-sm text-gray-700
                           ${isEditing ? 'p-0' : ''}
-                          ${!isIdColumn && !isEditing ? 'cursor-pointer' : ''}
+                          ${!isEditing ? 'cursor-pointer' : ''}
                           ${isEmptyRow && !isEditing ? 'opacity-50' : ''}
                         `}
                       >
-                        {isIdColumn ? (
-                          // ID 컬럼
-                          <div className="px-2 py-1.5 text-center font-mono text-xs h-[30px]">
-                            {isEmptyRow ? (
-                              <span className="text-gray-400 italic">new</span>
-                            ) : (
-                              row.id
-                            )}
-                          </div>
-                        ) : (
-                          // 편집 가능한 셀 (빈 행 포함) + 현재 재고 열에 상태 배지
-                          <EditableCell
+                        <EditableCell
                             value={row[header]}
                             rowId={row.id}
                             column={header}
@@ -2028,7 +2014,6 @@ export default function EditPage() {
                             }}
                             stockStatusBadge={header === currentStockColumn && !isEmptyRow ? getStockStatusBadge(row, headers, currentStockColumn) : null}
                           />
-                        )}
                       </td>
                     );
                   })}

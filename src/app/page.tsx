@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import Link from 'next/link';
 import FileUpload from '@/components/FileUpload';
@@ -9,6 +9,7 @@ import SheetTabs from '@/components/SheetTabs';
 import { ExcelFile, ParsedExcelData, SheetData } from '@/types/excel';
 import { supabase } from '@/lib/supabase';
 import { useDragScroll } from '@/hooks/useDragScroll';
+import { isNumericColumn, formatCellValue, getDisplayHeaders } from '@shared/excel-utils';
 
 interface FileWithData {
   file: ExcelFile;
@@ -61,12 +62,12 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
     return result;
   }, [data.rows, searchTerm, sortColumn, sortDirection]);
 
-  // 가상화 설정
+  // 가상화 설정 (Dense Table)
   const rowVirtualizer = useVirtualizer({
     count: filteredAndSortedData.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 48, // 각 행의 예상 높이
-    overscan: 10, // 화면 밖에 미리 렌더링할 행 수
+    estimateSize: () => 36,
+    overscan: 10,
   });
 
   const handleSort = (columnIndex: number) => {
@@ -186,18 +187,18 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
     }
   };
 
-  // 컬럼 너비 계산
+  // 컬럼 너비 계산 (Dense, ID 비노출)
+  const displayHeaders = getDisplayHeaders(data.headers);
   const columnWidths = useMemo(() => {
-    const minWidth = 120;
-    const maxWidth = 250;
+    const minWidth = 80;
+    const maxWidth = 220;
     
-    return data.headers.map((header, index) => {
+    return displayHeaders.map((header) => {
       let maxLength = header.length;
-      
-      // 처음 100개 행만 샘플링하여 최대 길이 계산
+      const origIndex = data.headers.indexOf(header);
       const sampleRows = filteredAndSortedData.slice(0, 100);
       sampleRows.forEach(row => {
-        const cellLength = String(row[index] ?? '').length;
+        const cellLength = String((origIndex >= 0 ? row[origIndex] : null) ?? '').length;
         if (cellLength > maxLength) {
           maxLength = cellLength;
         }
@@ -206,12 +207,12 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
       const calculatedWidth = Math.min(Math.max(maxLength * 10 + 32, minWidth), maxWidth);
       return calculatedWidth;
     });
-  }, [data.headers, filteredAndSortedData]);
+  }, [displayHeaders, filteredAndSortedData]);
 
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0) + 80; // +80 for row number column
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 overflow-hidden shadow-sm">
+    <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 overflow-hidden shadow-sm min-w-0" data-table-dense="true" data-excel-grid="true">
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-900/50">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -315,12 +316,12 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
         )}
       </div>
 
-      {/* Virtualized Table Container - LTR 정렬 + 드래그 스크롤 */}
+      {/* Virtualized Table Container - LTR 정렬 + 드래그 스크롤, 모바일 가로 스크롤 */}
       <div 
         ref={dragScrollRef}
-        className={`overflow-x-auto overflow-y-hidden select-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`overflow-x-auto overflow-y-hidden select-none min-w-0 ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         dir="ltr"
-        style={{ direction: 'ltr' }}
+        style={{ direction: 'ltr', WebkitOverflowScrolling: 'touch' }}
       >
         <div style={{ minWidth: Math.max(totalWidth, 800) }} className="text-left">
           {/* Table Header - Fixed */}
@@ -331,12 +332,12 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                 #
               </div>
               {/* Column Headers */}
-              {data.headers.map((header, index) => (
+              {displayHeaders.map((header, index) => (
                 <div
                   key={index}
                   onClick={() => handleSort(index)}
                   style={{ width: columnWidths[index] }}
-                  className="flex-shrink-0 px-3 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors select-none border-l border-gray-200 dark:border-slate-600"
+                  className={`flex-shrink-0 table-excel-cell px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors select-none border-l border-gray-300 dark:border-slate-500 ${isNumericColumn(header) ? 'text-right' : ''}`}
                 >
                   <div className="flex items-center gap-1">
                     <span className="truncate">{header}</span>
@@ -367,7 +368,7 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
           <div
             ref={parentRef}
             className="overflow-y-auto"
-            style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}
+            style={{ height: 'calc(100vh - 280px)', minHeight: '350px' }}
           >
             {filteredAndSortedData.length === 0 ? (
               <div className="flex items-center justify-center h-full text-gray-400">
@@ -399,24 +400,26 @@ function VirtualizedTable({ data, sheetName, fileName }: { data: SheetData; shee
                       }`}
                     >
                       {/* Row Number */}
-                      <div className="flex-shrink-0 w-16 px-3 py-3 text-xs text-gray-400 font-mono">
+                      <div className="flex-shrink-0 table-excel-cell w-14 px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 font-mono font-semibold text-right border-r border-gray-200 dark:border-slate-600">
                         {(virtualRow.index + 1).toLocaleString()}
                       </div>
-                      {/* Cells */}
-                      {row.map((cell, cellIndex) => (
-                        <div
-                          key={cellIndex}
-                          style={{ width: columnWidths[cellIndex] }}
-                          className="flex-shrink-0 px-3 py-3 text-sm text-gray-900 dark:text-gray-100 border-l border-gray-100 dark:border-slate-700"
-                        >
-                          <span 
-                            className="block truncate" 
-                            title={String(cell ?? '')}
+                      {/* Cells - Dense, 숫자 우측+굵게 */}
+                      {displayHeaders.map((header, cellIndex) => {
+                        const origIndex = data.headers.indexOf(header);
+                        const cell = origIndex >= 0 ? row[origIndex] : null;
+                        const isNum = isNumericColumn(header);
+                        return (
+                          <div
+                            key={header}
+                            style={{ width: columnWidths[cellIndex] }}
+                            className={`flex-shrink-0 table-excel-cell px-2 py-1.5 text-sm border-l border-gray-200 dark:border-slate-600 ${isNum ? 'text-right font-bold text-gray-900 dark:text-gray-100 table-numeric-cell' : 'text-gray-900 dark:text-gray-100'}`}
                           >
-                            {cell !== null && cell !== undefined ? String(cell) : '-'}
-                          </span>
-                        </div>
-                      ))}
+                            <span className="block truncate" title={formatCellValue(cell)}>
+                              {formatCellValue(cell)}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -454,9 +457,17 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<FileWithData | null>(null);
   const [activeSheet, setActiveSheet] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadSuccessMessage, setUploadSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!uploadSuccessMessage) return;
+    const t = setTimeout(() => setUploadSuccessMessage(null), 4000);
+    return () => clearTimeout(t);
+  }, [uploadSuccessMessage]);
 
   const handleUpload = useCallback(async (file: File) => {
     setIsLoading(true);
+    setUploadSuccessMessage(null);
 
     try {
       const formData = new FormData();
@@ -477,9 +488,15 @@ export default function Home() {
 
         setFiles((prev) => [newFileWithData, ...prev]);
         setSelectedFile(newFileWithData);
-        if (result.data.sheets.length > 0) {
+        if (result.data?.sheets?.length > 0) {
           setActiveSheet(result.data.sheets[0].name);
         }
+
+        const count = result.totalRowCount ?? result.data?.sheets?.reduce(
+          (sum: number, s: { data?: { rows?: unknown[] } }) => sum + (s.data?.rows?.length ?? 0),
+          0
+        ) ?? 0;
+        setUploadSuccessMessage(`${Number(count).toLocaleString()}건의 데이터가 성공적으로 반영되었습니다.`);
       } else {
         alert(result.error || '파일 업로드에 실패했습니다.');
       }
@@ -558,8 +575,18 @@ export default function Home() {
         </div>
       </header>
 
+      {/* 업로드 성공 안내 */}
+      {uploadSuccessMessage && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] px-4 py-3 bg-green-600 text-white text-sm font-medium rounded-lg shadow-lg animate-fade-in flex items-center gap-2">
+          <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          {uploadSuccessMessage}
+        </div>
+      )}
+
       {/* Main Content */}
-      <main className="w-full px-6 py-6">
+      <main className="w-full px-4 sm:px-6 py-4 sm:py-6">
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
           {/* Left Column - Upload & File List */}
           <div className="xl:col-span-1 space-y-4">
@@ -575,8 +602,8 @@ export default function Home() {
             />
           </div>
 
-          {/* Right Column - Data View (Wider) */}
-          <div className="xl:col-span-3">
+          {/* Right Column - Data View (Wider) - min-w-0으로 모바일 가로 스크롤 보장 */}
+          <div className="xl:col-span-3 min-w-0">
             {selectedFile && currentSheetData ? (
               <>
                 {/* File Info */}

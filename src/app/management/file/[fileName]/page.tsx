@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import AlertModal from '@/components/AlertModal';
+import { isNumericColumn, formatCellValue, FIXED_INVENTORY_COLUMNS, mapRowToFixedColumns, getFixedColumnForOriginal, getDisplayHeaders } from '@shared/excel-utils';
 
 interface Alert {
   id: number;
@@ -99,11 +100,11 @@ function DBDataTable({
     return result;
   }, [data, searchTerm, sortColumn, sortDirection]);
 
-  // 가상화 설정
+  // 가상화 설정 (Dense: 행 간격 최소화)
   const rowVirtualizer = useVirtualizer({
     count: filteredAndSortedData.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 44,
+    estimateSize: () => 36,
     overscan: 10,
   });
 
@@ -116,10 +117,10 @@ function DBDataTable({
     }
   };
 
-  // 컬럼 너비 계산
+  // 컬럼 너비 계산 (Dense 스타일)
   const columnWidths = useMemo(() => {
-    const minWidth = 100;
-    const maxWidth = 200;
+    const minWidth = 80;
+    const maxWidth = 220;
     
     return headers.map((header) => {
       let maxLength = header.length;
@@ -140,7 +141,7 @@ function DBDataTable({
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0) + 60;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+    <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 overflow-hidden shadow-sm min-w-0" data-table-dense="true" data-excel-grid="true">
       {/* Header */}
       <div className="px-5 py-4 border-b border-gray-200 bg-white">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -198,14 +199,14 @@ function DBDataTable({
         </div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto" dir="ltr">
+      {/* Table - 모바일 가로 스크롤 */}
+      <div className="overflow-x-auto min-w-0" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' }}>
         <div style={{ minWidth: totalWidth }} className="text-left">
-          {/* Table Header */}
-          <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+          {/* Table Header - Dense, Sticky, 엑셀 스타일 */}
+          <div className="sticky top-0 z-10 table-excel-header border-b border-gray-300 dark:border-slate-600 shadow-sm">
             <div className="flex">
               {/* Row Number Header */}
-              <div className="flex-shrink-0 w-14 px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              <div className="flex-shrink-0 w-12 px-2 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider border-r border-gray-300 dark:border-slate-500">
                 #
               </div>
               {/* Column Headers */}
@@ -214,7 +215,9 @@ function DBDataTable({
                   key={header}
                   onClick={() => handleSort(header)}
                   style={{ width: columnWidths[index] }}
-                  className="flex-shrink-0 px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none border-l border-gray-200"
+                  className={`flex-shrink-0 table-excel-cell px-2 py-2 text-xs font-semibold uppercase tracking-wider cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors select-none border-l border-gray-300 dark:border-slate-500 ${
+                    isNumericColumn(header) ? 'text-right text-gray-600 dark:text-gray-400 table-numeric-cell' : 'text-left text-gray-600 dark:text-gray-400'
+                  }`}
                 >
                   <div className="flex items-center gap-1">
                     <span className="truncate">{header}</span>
@@ -240,7 +243,7 @@ function DBDataTable({
           <div
             ref={parentRef}
             className="overflow-y-auto bg-white"
-            style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}
+            style={{ height: 'calc(100vh - 280px)', minHeight: '350px' }}
           >
             {filteredAndSortedData.length === 0 ? (
               <div className="flex items-center justify-center h-full text-gray-400">
@@ -267,33 +270,36 @@ function DBDataTable({
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      className={`flex items-center border-b border-gray-100 hover:bg-green-50 transition-colors ${
-                        virtualRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                      className={`flex items-center border-b border-gray-100 dark:border-slate-700 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors ${
+                        virtualRow.index % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-gray-50 dark:bg-slate-800/80'
                       }`}
                     >
                       {/* Row Number */}
-                      <div className="flex-shrink-0 w-14 px-3 py-2 text-xs text-gray-400 font-mono">
+                      <div className="flex-shrink-0 table-excel-cell w-12 px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 font-mono font-semibold text-right border-r border-gray-200 dark:border-slate-600">
                         {(virtualRow.index + 1).toLocaleString()}
                       </div>
-                      {/* Cells */}
+                      {/* Cells - Dense, 숫자 우측정렬+굵게 */}
                       {headers.map((header, cellIndex) => {
                         const rowIndex = row.row_index as number | undefined;
                         const alertInfo = rowIndex !== undefined ? alertRowMap.get(rowIndex) : undefined;
-                        const cellAlert = alertInfo?.find(a => a.column === header);
+                        const cellAlert = alertInfo?.find(
+                          a => a.column === header || getFixedColumnForOriginal(a.column) === header
+                        );
+                        const isNum = isNumericColumn(header);
                         
                         return (
                           <div
                             key={header}
                             style={{ width: columnWidths[cellIndex] }}
-                            className={`flex-shrink-0 px-3 py-2 text-sm border-l border-gray-100 ${
+                            className={`flex-shrink-0 table-excel-cell px-2 py-1.5 text-sm border-l border-gray-200 dark:border-slate-600 ${
                               cellAlert 
-                                ? 'bg-red-50 text-red-600' 
-                                : 'text-gray-700'
-                            }`}
+                                ? 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400' 
+                                : 'text-gray-700 dark:text-gray-200'
+                            } ${isNum ? 'text-right font-bold table-numeric-cell' : ''}`}
                           >
-                            <div className="flex items-center gap-1">
+                            <div className={`flex items-center gap-1 min-w-0 ${isNum ? 'justify-end' : ''}`}>
                               {cellAlert && (
-                                <svg className="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-3.5 h-3.5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                 </svg>
                               )}
@@ -301,10 +307,10 @@ function DBDataTable({
                                 className="block truncate" 
                                 title={cellAlert 
                                   ? `⚠️ 경고: ${cellAlert.value} (기준: ${cellAlert.threshold} ${cellAlert.type === 'below' ? '미만' : cellAlert.type === 'above' ? '초과' : '동일'})`
-                                  : String(row[header] ?? '')
+                                  : formatCellValue(row[header] as string | number | boolean | null)
                                 }
                               >
-                                {row[header] !== null && row[header] !== undefined ? String(row[header]) : '-'}
+                                {formatCellValue(row[header] as string | number | boolean | null)}
                               </span>
                             </div>
                           </div>
@@ -394,23 +400,20 @@ export default function FileDetailPage() {
         // data 컬럼의 JSON을 풀어서 flat한 데이터로 변환
         const flattenedData: InventoryRow[] = allData.map((item) => {
           const { id, data: jsonData, file_name, row_index, created_at, ...rest } = item;
-          // data 컬럼이 JSON 객체인 경우 풀어서 합침
           if (jsonData && typeof jsonData === 'object' && !Array.isArray(jsonData)) {
             const jsonObj = jsonData as Record<string, string | number | boolean | null>;
-            return { id, row_index, ...jsonObj, ...rest };
+            return { id, row_index, ...jsonObj, ...rest } as InventoryRow;
           }
-          return { id, row_index, ...rest };
+          return { id, row_index, ...rest } as InventoryRow;
         });
 
-        // 헤더 추출 (첫 번째 행의 data JSON 키들 사용)
-        const firstItem = allData[0];
-        let dataHeaders: string[] = [];
-        if (firstItem.data && typeof firstItem.data === 'object') {
-          dataHeaders = Object.keys(firstItem.data as Record<string, unknown>);
-        }
-        
-        setHeaders(['id', ...dataHeaders]);
-        setData(flattenedData);
+        // 고정 열 순서 [순번|품목명|규격|단위|현재재고|기준재고|상태]로 매핑 (기존/신규 데이터 공통)
+        const mappedData = flattenedData.map((row, i) =>
+          mapRowToFixedColumns(row as unknown as Record<string, unknown>, i)
+        ) as unknown as InventoryRow[];
+
+        setHeaders([...FIXED_INVENTORY_COLUMNS]);
+        setData(mappedData);
       } else {
         setData([]);
         setHeaders([]);
@@ -576,7 +579,7 @@ export default function FileDetailPage() {
       </header>
 
       {/* Main Content */}
-      <main className="w-full px-6 py-6 bg-gray-50 min-h-[calc(100vh-64px)]">
+      <main className="w-full px-4 sm:px-6 py-4 sm:py-6 bg-gray-50 min-h-[calc(100vh-64px)] min-w-0">
         {/* 알림 경고 배너 */}
         {alertCount > 0 && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl shadow-sm">
@@ -688,7 +691,7 @@ export default function FileDetailPage() {
         isOpen={isAlertModalOpen}
         onClose={() => setIsAlertModalOpen(false)}
         fileName={fileName}
-        columns={headers}
+        columns={getDisplayHeaders(headers)}
         onAlertCreated={() => {
           checkAlerts();
         }}
