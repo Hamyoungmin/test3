@@ -24,6 +24,10 @@
 .DS_Store
 *.pem
 
+# IDE / 로컬 도구
+.cursor/
+.playwright-mcp/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
