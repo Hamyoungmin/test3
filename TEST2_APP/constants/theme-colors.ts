@@ -24,6 +24,15 @@ export const AppColors = {
     redBorder: '#FECACA',
     amberLight: '#FFFBEB',
     amberBorder: '#FDE68A',
+    reportShareBg: '#2563EB',       // blue-600, 신뢰감
+    reportShareText: '#FFFFFF',
+    reportShareBorder: '#1D4ED8',  // blue-700
+    reportShareShadow: '#1D4ED840', // 그림자
+    errorMsgBg: '#FEF2F2',
+    errorMsgText: '#B91C1C',
+    successMsgBg: '#F0FDF4',
+    successMsgText: '#166534',
+    activityLogCard: '#F3F4F6',
   },
   dark: {
     background: '#0F172A',
@@ -45,6 +54,15 @@ export const AppColors = {
     redBorder: '#991B1B',
     amberLight: '#78350F',
     amberBorder: '#92400E',
+    reportShareBg: '#38BDF8',       // sky-400, 네온 블루
+    reportShareText: '#0F172A',     // slate-900, 시인성
+    reportShareBorder: '#0EA5E9',  // sky-500
+    reportShareShadow: '#38BDF840', // 그림자
+    errorMsgBg: '#7F1D1D',
+    errorMsgText: '#FEE2E2',
+    successMsgBg: '#14532D',
+    successMsgText: '#DCFCE7',
+    activityLogCard: '#334155',
   },
 } as const;
 

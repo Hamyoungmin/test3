@@ -17,7 +17,9 @@ import {
   Platform,
   Share,
   AppState,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 // Reanimated은 웹에서 renderNodeDestructive 에러 발생 → 일반 View 사용 (테마 전환 시 애니메이션 없음)
 import { Ionicons } from '@expo/vector-icons';
 import { Dimensions } from 'react-native';
@@ -30,6 +32,7 @@ import { supabase } from '../../lib/supabase';
 import { sendLocalNotification } from '../../lib/notifications';
 import { getAIBusinessAdvice } from '../../lib/openai';
 import { isNumericColumn } from '../../../shared/excel-utils';
+import Voice from '@react-native-voice/voice';
 
 const LAST_CONFIRM_KEY = 'lastConfirmTimestamp';
 function formatLastConfirmTime(iso: string): string {
@@ -270,6 +273,20 @@ export default function HomeScreen() {
   const [lastConfirmedAt, setLastConfirmedAt] = useState<string | null>(null);
   const lastConfirmHighlight = useRef(new Animated.Value(0)).current;
   const [bulkConfirming, setBulkConfirming] = useState(false);
+  const [barcodeScanModalVisible, setBarcodeScanModalVisible] = useState(false);
+  const [selectedBranch, setSelectedBranch] = useState<'강남본점' | '성수점' | '홍대점'>('강남본점');
+  const [branchDropdownVisible, setBranchDropdownVisible] = useState(false);
+
+  // 음성 인식 관련 state
+  const [voiceModalVisible, setVoiceModalVisible] = useState(false);
+  const [voiceRecognizedText, setVoiceRecognizedText] = useState('');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const voicePulseAnim = useRef(new Animated.Value(1)).current;
+  const voiceAnimActiveRef = useRef(false);
+
+  // 현장 스냅샷 (항목별 첨부 사진 - 시연용 로컬 상태)
+  const [itemPhotos, setItemPhotos] = useState<Record<number, string>>({});
+  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   
   // AI 경영 한마디 관련 state
   const [aiAdvice, setAiAdvice] = useState<string>('');
@@ -512,7 +529,11 @@ export default function HomeScreen() {
                 }).length,
                 hasConfirmed: true,
               })));
-              Alert.alert('완료', `${formatCount(unconfirmed.length)} 품목이 확정되었습니다.`);
+              Alert.alert(
+                '발주 완료',
+                '발주 요청이 5개의 협력업체에 성공적으로 전송되었습니다.',
+                [{ text: '확인' }]
+              );
             } catch (err) {
               Alert.alert('오류', err instanceof Error ? err.message : '전체 확정에 실패했습니다.');
             } finally {
@@ -541,6 +562,29 @@ export default function HomeScreen() {
     setEditBaseStock('');
     setEditExpiryDate('');
   };
+
+  // 현장 스냅샷 촬영 (카메라 연동, 권한 요청)
+  const handleTakeSnapshot = useCallback(async (item: InventoryItem) => {
+    if (Platform.OS === 'web') {
+      Alert.alert('알림', '카메라는 모바일(iOS/Android)에서만 사용할 수 있습니다.');
+      return;
+    }
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('권한 필요', '현장 스냅샷 촬영을 위해 카메라 권한이 필요합니다.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: 0.8,
+    });
+    if (result.canceled) return;
+    const uri = result.assets[0]?.uri;
+    if (uri) {
+      setItemPhotos(prev => ({ ...prev, [item.id]: uri }));
+    }
+  }, []);
 
   // 현재 재고 컬럼 키 찾기 - 금액/기준 열 제외 (수량 열만)
   const findStockColumnKey = (data: Record<string, unknown>): string | null => {
@@ -748,7 +792,7 @@ export default function HomeScreen() {
               {item.lowStockCount > 0 && (
                 <View style={styles.fileCardAlertBadge}>
                   <Ionicons name="warning" size={12} color="#fff" />
-                  <Text style={styles.fileCardAlertBadgeText}>{item.lowStockCount.toLocaleString()}</Text>
+                  <Text style={styles.fileCardAlertBadgeText}>보충 필요 {item.lowStockCount.toLocaleString()}</Text>
                 </View>
               )}
               {item.expiringCount > 0 && (
@@ -768,7 +812,7 @@ export default function HomeScreen() {
   const renderItem = ({ item }: { item: InventoryItem }) => (
     <View style={[
       styles.itemCard,
-      item?.isLowStock && styles.lowStockCard,
+      item?.isLowStock && { backgroundColor: colors.redLight, borderColor: colors.redBorder, borderWidth: 2 },
       item?.isExpired && styles.expiredCard,
       item?.isExpiringSoon && !item?.isExpired && styles.expiringSoonCard,
     ]}>
@@ -792,7 +836,7 @@ export default function HomeScreen() {
           {item?.isLowStock && (
             <View style={styles.alertBadge}>
               <Ionicons name="warning" size={16} color="#fff" />
-              <Text style={styles.alertBadgeText}>재고 부족</Text>
+              <Text style={styles.alertBadgeText}>보충 필요</Text>
             </View>
           )}
           <TouchableOpacity 
@@ -814,7 +858,7 @@ export default function HomeScreen() {
         <View style={styles.stockDivider} />
         
         <View style={styles.stockColumn}>
-          <Text style={styles.stockLabel}>기준 재고</Text>
+          <Text style={styles.stockLabel}>적정 재고(Threshold)</Text>
           <Text style={styles.stockValue}>
             {(item?.base_stock ?? 0).toLocaleString()}개
           </Text>
@@ -934,6 +978,66 @@ export default function HomeScreen() {
     });
     return () => subscription.remove();
   }, [fetchInventory]);
+
+  // 음성 인식 Voice 이벤트 리스너 및 정리
+  const startVoiceRecognition = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('알림', '음성 인식은 모바일(iOS/Android)에서만 사용할 수 있습니다.');
+      return;
+    }
+    setVoiceError(null);
+    setVoiceRecognizedText('');
+    setVoiceModalVisible(true);
+    voiceAnimActiveRef.current = true;
+    const pulseLoop = () => {
+      if (!voiceAnimActiveRef.current) return;
+      Animated.sequence([
+        Animated.timing(voicePulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: true }),
+        Animated.timing(voicePulseAnim, { toValue: 0.95, duration: 600, useNativeDriver: true }),
+      ]).start(() => pulseLoop());
+    };
+    pulseLoop();
+    try {
+      await Voice.start('ko-KR');
+    } catch (e) {
+      setVoiceError('다시 말씀해 주세요');
+      setTimeout(() => setVoiceModalVisible(false), 2000);
+    }
+  }, [voicePulseAnim]);
+
+  const stopVoiceRecognition = useCallback(async () => {
+    voiceAnimActiveRef.current = false;
+    try {
+      await Voice.stop();
+    } catch (_) {}
+    setVoiceModalVisible(false);
+    voicePulseAnim.stopAnimation();
+    voicePulseAnim.setValue(1);
+  }, [voicePulseAnim]);
+
+  useEffect(() => {
+    Voice.onSpeechPartialResults = (e) => {
+      const text = e.value?.[0] ?? '';
+      setVoiceRecognizedText(text);
+      setSearchQuery(text);
+    };
+    Voice.onSpeechResults = (e) => {
+      const text = e.value?.[0] ?? '';
+      setVoiceRecognizedText(text);
+      setSearchQuery(text);
+      setTimeout(stopVoiceRecognition, 500);
+    };
+    Voice.onSpeechEnd = () => {
+      setTimeout(stopVoiceRecognition, 300);
+    };
+    Voice.onSpeechError = (e) => {
+      setVoiceError('다시 말씀해 주세요');
+      setTimeout(stopVoiceRecognition, 1500);
+    };
+    return () => {
+      Voice.destroy().then(Voice.removeAllListeners);
+    };
+  }, [stopVoiceRecognition]);
 
   // 모바일 대시보드용 핵심 지표
   const unconfirmedCount = inventory.filter(item => !item.base_stock || item.base_stock === 0).length;
@@ -1126,9 +1230,20 @@ ${orderItems}
       };
     });
 
-    const legend = sortedItems.map(item => 
-      item.itemName.length > 8 ? item.itemName.substring(0, 8) + '...' : item.itemName
-    );
+    // 안전 재고 기준선: 차트된 품목들의 최소 기준 재고 (빨간색 수평선)
+    const safeStockLevel = Math.min(...sortedItems.map(i => i.base_stock || i.currentStock * 1.5));
+    datasets.push({
+      data: Array(7).fill(safeStockLevel),
+      color: () => '#DC2626',
+      strokeWidth: 2,
+    });
+
+    const legend = [
+      ...sortedItems.map(item => 
+        item.itemName.length > 8 ? item.itemName.substring(0, 8) + '...' : item.itemName
+      ),
+      '안전 재고 기준선',
+    ];
 
     setChartData({ labels, datasets, legend });
 
@@ -1162,13 +1277,68 @@ ${orderItems}
     );
   }
 
+  const BRANCH_OPTIONS: ('강남본점' | '성수점' | '홍대점')[] = ['강남본점', '성수점', '홍대점'];
+
   // 헤더 컴포넌트 (FlatList와 ScrollView에서 재사용)
   const renderHeaderContent = () => (
     <>
+      {/* 지점 선택 드롭다운 */}
+      <TouchableOpacity
+        style={[styles.branchSelector, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        onPress={() => setBranchDropdownVisible(true)}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="business" size={20} color={colors.textSecondary} style={styles.branchSelectorIcon} />
+        <Text style={[styles.branchSelectorText, { color: colors.text }]} numberOfLines={1}>
+          {selectedBranch}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
+      </TouchableOpacity>
+
+      {/* 지점 선택 모달 */}
+      <Modal
+        visible={branchDropdownVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBranchDropdownVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.branchModalOverlay}
+          activeOpacity={1}
+          onPress={() => setBranchDropdownVisible(false)}
+        >
+          <View
+            style={[styles.branchModalContent, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <Text style={[styles.branchModalTitle, { color: colors.text }]}>지점 선택</Text>
+            {BRANCH_OPTIONS.map((branch) => (
+              <TouchableOpacity
+                key={branch}
+                style={[
+                  styles.branchModalOption,
+                  { borderColor: colors.border, backgroundColor: selectedBranch === branch ? colors.surfaceAlt : colors.surface },
+                ]}
+                onPress={() => {
+                  setSelectedBranch(branch);
+                  setBranchDropdownVisible(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.branchModalOptionText, { color: colors.text }]}>{branch}</Text>
+                {selectedBranch === branch && (
+                  <Ionicons name="checkmark" size={20} color={colors.green} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* 헤더 */}
       <View style={[styles.header, { backgroundColor: colors.headerBg, borderBottomColor: colors.border }]}>
         <View>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>재고 현황</Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>{selectedBranch} 재고 현황</Text>
           <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
             {totalFiles.toLocaleString()}개 파일 · 총 {totalItems.toLocaleString()}개 품목
           </Text>
@@ -1217,27 +1387,41 @@ ${orderItems}
         </View>
       </View>
 
-      {/* 🔍 검색바 (헤더 바로 아래 고정) */}
+      {/* 🔍 검색바 (헤더 바로 아래 고정) + 바코드 스캔 */}
       <View style={[styles.topSearchSection, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <View style={[styles.topSearchInputWrapper, { backgroundColor: colors.searchBg, borderColor: colors.border }]}>
-          <Ionicons name="search" size={22} color={colors.textMuted} style={styles.topSearchIcon} />
-          <TextInput
-            style={[styles.topSearchInput, { color: colors.text }]}
-            placeholder="품목 검색..."
-            placeholderTextColor={colors.textMuted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity 
-              onPress={() => setSearchQuery('')} 
-              style={styles.topSearchClearButton}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="close-circle" size={22} color={colors.textMuted} />
-            </TouchableOpacity>
-          )}
+        <View style={styles.topSearchRow}>
+          <View style={[styles.topSearchInputWrapper, { backgroundColor: colors.searchBg, borderColor: colors.border }]}>
+            <Ionicons name="search" size={22} color={colors.textMuted} style={styles.topSearchIcon} />
+            <TextInput
+              style={[styles.topSearchInput, { color: colors.text }]}
+              placeholder="품목명 검색..."
+              placeholderTextColor={colors.textMuted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              returnKeyType="search"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity 
+                onPress={() => setSearchQuery('')} 
+                style={styles.topSearchClearButton}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Ionicons name="close-circle" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            onPress={startVoiceRecognition}
+            style={[styles.voiceMicButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Ionicons name="mic" size={24} color="#166534" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setBarcodeScanModalVisible(true)}
+            style={[styles.barcodeScanButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Ionicons name="camera" size={26} color="#166534" />
+          </TouchableOpacity>
         </View>
 
         {/* 퀵 필터 칩 - 가로 스크롤, 모바일 최적화 */}
@@ -1324,6 +1508,14 @@ ${orderItems}
             )}
           </View>
         </View>
+        {lowStockItems > 0 && (
+          <View style={[styles.dashboardRiskSummary, { backgroundColor: colors.redLight, borderColor: colors.redBorder }]}>
+            <Ionicons name="warning" size={18} color={colors.red} />
+            <Text style={[styles.dashboardRiskSummaryText, { color: colors.red }]}>
+              현재 위험 품목: {lowStockItems}개
+            </Text>
+          </View>
+        )}
         <View style={styles.dashboardGrid}>
           <View style={styles.dashboardGridRow}>
             {/* 미확정 품목 */}
@@ -1401,6 +1593,16 @@ ${orderItems}
               </View>
             </View>
           </View>
+        </View>
+      </View>
+
+      {/* AI 재고 예측 섹션 - 시연용 비즈니스 인사이트 */}
+      <View style={[styles.aiForecastSection, { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' }]}>
+        <View style={styles.aiForecastContent}>
+          <Text style={styles.aiForecastText}>
+            빅데이터 분석 결과: 다음 주말 단체 예약 대비, 소고기 재고를 20% 선제 주문하세요.
+          </Text>
+          <Text style={styles.aiForecastSparkle}>✨</Text>
         </View>
       </View>
 
@@ -1537,6 +1739,33 @@ ${orderItems}
     </>
   );
 
+  // 최근 활동 로그 - 현재 시간 기준 분산 (실시간 느낌)
+  const activityLogs = (() => {
+    const now = new Date();
+    const fmt = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return [
+      { time: fmt(now), msg: '강남본점 김철수 사원이 소고기 10개 추가' },
+      { time: fmt(new Date(now.getTime() - 12 * 60000)), msg: '이영희 매니저가 재고 확정 완료' },
+      { time: fmt(new Date(now.getTime() - 35 * 60000)), msg: '성수점 박지훈이 돼지고기 5개 수정' },
+      { time: fmt(new Date(now.getTime() - 48 * 60000)), msg: '시스템 알림: 유통기한 임박 품목 2건' },
+    ];
+  })();
+
+  const renderActivityLogSection = () => (
+    <View style={[styles.activityLogSection, { backgroundColor: colors.activityLogCard, borderColor: colors.border }]}>
+      <View style={styles.activityLogHeader}>
+        <Ionicons name="time-outline" size={20} color={colors.textSecondary} />
+        <Text style={[styles.activityLogTitle, { color: colors.text }]}>최근 활동 로그</Text>
+      </View>
+      {activityLogs.map((log, i) => (
+        <View key={i} style={[styles.activityLogRow, i > 0 && { borderTopWidth: 1, borderTopColor: colors.borderLight }]}>
+          <Text style={[styles.activityLogTime, { color: colors.textSecondary }]}>{log.time}</Text>
+          <Text style={[styles.activityLogMsg, { color: colors.text }]} numberOfLines={1}>{log.msg}</Text>
+        </View>
+      ))}
+    </View>
+  );
+
   // AI 경영 한마디 섹션 (푸터) - 인박스 로딩 + 스르륵 등장 효과
   const renderAIAdviceSection = () => (
     <View style={styles.aiAdviceContainer}>
@@ -1618,6 +1847,100 @@ ${orderItems}
 
   return (
     <View style={[styles.container, containerBg]}>
+      {/* 바코드 스캔 시뮬레이션 모달 */}
+      <Modal
+        visible={barcodeScanModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBarcodeScanModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.barcodeModalOverlay}
+          activeOpacity={1}
+          onPress={() => setBarcodeScanModalVisible(false)}
+        >
+          <View style={styles.barcodeModalContent} onStartShouldSetResponder={() => true}>
+            <Ionicons name="barcode" size={48} color="#166534" style={{ marginBottom: 16 }} />
+            <Text style={styles.barcodeModalTitle}>바코드 스캔 모드 진입</Text>
+            <Text style={styles.barcodeModalSubtitle}>품목을 비춰주세요</Text>
+            <TouchableOpacity
+              style={styles.barcodeModalCloseButton}
+              onPress={() => setBarcodeScanModalVisible(false)}
+            >
+              <Text style={styles.barcodeModalCloseText}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* 스냅샷 전체보기 모달 */}
+      <Modal
+        visible={!!previewImageUri}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUri(null)}
+      >
+        <TouchableOpacity
+          style={[styles.previewModalOverlay, { backgroundColor: 'rgba(0,0,0,0.9)' }]}
+          activeOpacity={1}
+          onPress={() => setPreviewImageUri(null)}
+        >
+          <View style={styles.previewModalContent} onStartShouldSetResponder={() => true}>
+            {previewImageUri && (
+              <Image
+                source={{ uri: previewImageUri }}
+                style={styles.previewModalImage}
+                resizeMode="contain"
+              />
+            )}
+            <TouchableOpacity
+              style={[styles.previewModalCloseBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => setPreviewImageUri(null)}
+            >
+              <Text style={[styles.previewModalCloseText, { color: colors.text }]}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* 음성 인식 모달 - 듣고 있습니다... */}
+      <Modal
+        visible={voiceModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={stopVoiceRecognition}
+      >
+        <View style={styles.voiceModalOverlay}>
+          <View
+            style={[
+              styles.voiceModalContent,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <Animated.View style={[styles.voiceModalIconWrap, { transform: [{ scale: voicePulseAnim }] }]}>
+              <Ionicons name="mic" size={48} color={colors.green} />
+            </Animated.View>
+            <Text style={[styles.voiceModalTitle, { color: colors.text }]}>듣고 있습니다...</Text>
+            {voiceRecognizedText.length > 0 && (
+              <View style={[styles.voiceModalTextWrap, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                <Text style={[styles.voiceModalRecognizedText, { color: colors.text }]} numberOfLines={3}>
+                  {voiceRecognizedText}
+                </Text>
+              </View>
+            )}
+            {voiceError && (
+              <Text style={[styles.voiceModalErrorText, { color: colors.red }]}>{voiceError}</Text>
+            )}
+            <TouchableOpacity
+              style={[styles.voiceModalCloseBtn, { backgroundColor: colors.border }]}
+              onPress={stopVoiceRecognition}
+            >
+              <Text style={[styles.voiceModalCloseBtnText, { color: colors.text }]}>취소</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* 재고 리스트 - FlatList 하나로 통합 */}
       {/* 📁 파일 리스트 (메인 화면) - 2열 그리드 */}
       
@@ -1684,6 +2007,29 @@ ${orderItems}
         ListFooterComponent={
           <>
             {renderAIAdviceSection()}
+            <TouchableOpacity
+              style={[
+                styles.reportShareButton,
+                {
+                  backgroundColor: colors.reportShareBg,
+                  borderColor: colors.reportShareBorder,
+                  shadowColor: colors.reportShareShadow,
+                },
+              ]}
+              onPress={() => {
+                Alert.alert('PDF 생성 및 전송', '재고 리포트를 PDF로 생성해 전송하시겠습니까?', [
+                  { text: '취소', style: 'cancel' },
+                  { text: '확인', onPress: () => {} },
+                ]);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="document-text" size={22} color={colors.reportShareText} />
+              <Text style={[styles.reportShareButtonText, { color: colors.reportShareText }]}>
+                재고 리포트 공유
+              </Text>
+            </TouchableOpacity>
+            {renderActivityLogSection()}
             <View style={styles.listBottomPadding} />
           </>
         }
@@ -1875,15 +2221,16 @@ ${orderItems}
 
           {/* 테이블 - 고정 열 순서 [순번|품목명|규격|단위|현재재고|기준재고|상태] (기존/신규 데이터 공통) */}
           <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.detailTableScroll}>
-            <View style={[styles.detailTableWrapper, { minWidth: 44 + 7 * 88 }]}>
+            <View style={[styles.detailTableWrapper, { minWidth: 44 + 8 * 88 }]}>
               <View style={[styles.detailTableHeader, styles.detailTableHeaderSticky]}>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableColNo, styles.detailTableCellNum]}>순번</Text>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>품목명</Text>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>규격</Text>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableCol]}>단위</Text>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableCol, styles.detailTableCellNum]}>현재재고</Text>
-                <Text style={[styles.detailTableHeaderText, styles.detailTableCol, styles.detailTableCellNum]}>기준재고</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableCol, styles.detailTableCellNum]}>적정재고(Threshold)</Text>
                 <Text style={[styles.detailTableHeaderText, styles.detailTableColStatus]}>상태</Text>
+                <Text style={[styles.detailTableHeaderText, styles.detailTableColSnapshot]}>스냅샷</Text>
               </View>
 
               <FlatList
@@ -1904,8 +2251,8 @@ ${orderItems}
                     <TouchableOpacity
                       style={[
                         styles.detailTableRow,
-                        index % 2 === 1 && styles.detailTableRowAlt,
-                        isLowStock && styles.detailTableRowAlert,
+                        index % 2 === 1 && !isLowStock && !isExpired && styles.detailTableRowAlt,
+                        isLowStock && { backgroundColor: colors.redLight },
                         isExpired && styles.detailTableRowExpired,
                       ]}
                       onPress={() => openEditModal(item)}
@@ -1958,13 +2305,44 @@ ${orderItems}
                           </View>
                         ) : isLowStock ? (
                           <View style={styles.detailStatusBadgeAlert}>
-                            <Text style={styles.detailStatusBadgeAlertText}>부족</Text>
+                            <Text style={styles.detailStatusBadgeAlertText}>보충 필요</Text>
                           </View>
                         ) : (
                           <View style={styles.detailStatusBadgeNormal}>
                             <Text style={styles.detailStatusBadgeNormalText}>정상</Text>
                           </View>
                         )}
+                      </View>
+                      <View style={[styles.detailTableColSnapshot, { alignItems: 'center', justifyContent: 'center' }]}>
+                        <View style={styles.snapshotCellContent}>
+                          {itemPhotos[item?.id ?? 0] ? (
+                            <>
+                              <TouchableOpacity
+                                onPress={() => setPreviewImageUri(itemPhotos[item!.id])}
+                                style={styles.snapshotThumbnailWrap}
+                              >
+                                <Image
+                                  source={{ uri: itemPhotos[item!.id] }}
+                                  style={styles.snapshotThumbnail}
+                                  resizeMode="cover"
+                                />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                onPress={() => handleTakeSnapshot(item)}
+                                style={styles.snapshotCameraBtn}
+                              >
+                                <Ionicons name="camera" size={18} color={colors.green} />
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            <TouchableOpacity
+                              onPress={() => handleTakeSnapshot(item)}
+                              style={[styles.snapshotCameraBtn, { borderColor: colors.border }]}
+                            >
+                              <Ionicons name="camera" size={20} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
                       </View>
                     </TouchableOpacity>
                   );
@@ -2085,6 +2463,59 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
   },
+  reportShareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 10,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  reportShareButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  activityLogSection: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  activityLogHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  activityLogTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  activityLogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderTopWidth: 0,
+  },
+  activityLogTime: {
+    fontSize: 14,
+    fontWeight: '600',
+    minWidth: 44,
+  },
+  activityLogMsg: {
+    flex: 1,
+    fontSize: 14,
+  },
   listBottomPadding: {
     height: 180, // 하단 탭바 + 발주 예산 바가 가리지 않도록
   },
@@ -2166,7 +2597,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+  topSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   topSearchInputWrapper: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F3F4F6',
@@ -2175,6 +2612,119 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     paddingHorizontal: 14,
     minHeight: 52,
+  },
+  voiceMicButton: {
+    width: 48,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barcodeScanButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barcodeModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  barcodeModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 28,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  barcodeModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  barcodeModalSubtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  barcodeModalCloseButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    backgroundColor: '#166534',
+    borderRadius: 12,
+  },
+  barcodeModalCloseText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  voiceModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  voiceModalContent: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 28,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  voiceModalIconWrap: {
+    marginBottom: 16,
+  },
+  voiceModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  voiceModalTextWrap: {
+    width: '100%',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  voiceModalRecognizedText: {
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  voiceModalErrorText: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  voiceModalCloseBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+  },
+  voiceModalCloseBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   topSearchIcon: {
     marginRight: 10,
@@ -2324,6 +2874,29 @@ const styles = StyleSheet.create({
   emptyListContent: {
     flexGrow: 1,
   },
+  aiForecastSection: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  aiForecastContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  aiForecastText: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
+    color: '#4338CA',
+  },
+  aiForecastSparkle: {
+    fontSize: 22,
+  },
   aiSummaryContainer: {
     marginHorizontal: 16,
     marginTop: 16,
@@ -2373,6 +2946,64 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 17,
     color: '#6B7280',
+    fontWeight: '500',
+  },
+  branchSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  branchSelectorIcon: {
+    marginRight: 10,
+  },
+  branchSelectorText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  branchModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  branchModalContent: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  branchModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  branchModalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  branchModalOptionText: {
+    fontSize: 16,
     fontWeight: '500',
   },
   header: {
@@ -2478,6 +3109,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#166534',
+  },
+  dashboardRiskSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  dashboardRiskSummaryText: {
+    fontSize: 15,
+    fontWeight: '700',
   },
   dashboardGrid: {
     gap: 12,
@@ -3054,6 +3699,7 @@ const styles = StyleSheet.create({
   detailTableColNo: { width: 44, minWidth: 44, paddingHorizontal: 4 },
   detailTableCol: { width: 88, minWidth: 88, paddingHorizontal: 6 },
   detailTableColStatus: { width: 56, minWidth: 56, paddingHorizontal: 4 },
+  detailTableColSnapshot: { width: 72, minWidth: 72, paddingHorizontal: 4 },
   detailColNo: { width: 36, flex: 0 },
   detailColItemName: { flex: 2, minWidth: 80 },
   detailColSpec: { flex: 1.2, minWidth: 60 },
@@ -3174,6 +3820,58 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#9CA3AF',
     marginTop: 12,
+  },
+  snapshotCellContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  snapshotThumbnailWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  snapshotThumbnail: {
+    width: 32,
+    height: 32,
+  },
+  snapshotCameraBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  previewModalContent: {
+    width: '100%',
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewModalImage: {
+    width: '100%',
+    height: '80%',
+    maxHeight: 500,
+  },
+  previewModalCloseBtn: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  previewModalCloseText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   itemCard: {
     backgroundColor: '#FFFFFF',

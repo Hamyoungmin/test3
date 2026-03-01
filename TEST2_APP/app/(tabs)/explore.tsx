@@ -1,112 +1,327 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useState } from 'react';
+import {
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
+  Modal,
+  TextInput,
+  ScrollView,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useAppTheme } from '@/contexts/AppThemeContext';
+import { AppColors } from '@/constants/theme-colors';
+import { supabase } from '@/lib/supabase';
 
-import { Collapsible } from '@/components/ui/collapsible';
-import { ExternalLink } from '@/components/external-link';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Fonts } from '@/constants/theme';
+const RESET_PASSWORD = '1234';
 
-export default function TabTwoScreen() {
+export default function SettingsScreen() {
+  const { isDark } = useAppTheme();
+  const colors = AppColors[isDark ? 'dark' : 'light'];
+
+  const [modalVisible, setModalVisible] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  const openModal = () => {
+    setModalVisible(true);
+    setPasswordInput('');
+    setErrorMessage('');
+    setSuccessMessage('');
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setPasswordInput('');
+    setErrorMessage('');
+    setSuccessMessage('');
+  };
+
+  const handleReset = async () => {
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    if (passwordInput !== RESET_PASSWORD) {
+      setErrorMessage('비밀번호가 일치하지 않습니다.');
+      return;
+    }
+
+    setResetting(true);
+    try {
+      const { error } = await supabase.from('재고').delete().neq('id', -1);
+
+      if (error) {
+        setErrorMessage(error.message || '초기화에 실패했습니다.');
+        return;
+      }
+
+      setSuccessMessage('데모 데이터가 성공적으로 초기화되었습니다.');
+      setTimeout(() => {
+        closeModal();
+      }, 1500);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : '초기화 중 오류가 발생했습니다.');
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText
-          type="title"
-          style={{
-            fontFamily: Fonts.rounded,
-          }}>
-          Explore
-        </ThemedText>
-      </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
-        <ThemedText>
-          This app has two screens:{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-        </ThemedText>
-        <ThemedText>
-          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-          sets up the tab navigator.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/router/introduction">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
-        <ThemedText>
-          You can open this project on Android, iOS, and the web. To open the web version, press{' '}
-          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
-        </ThemedText>
-      </Collapsible>
-      <Collapsible title="Images">
-        <ThemedText>
-          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
-          different screen densities
-        </ThemedText>
-        <Image
-          source={require('@/assets/images/react-logo.png')}
-          style={{ width: 100, height: 100, alignSelf: 'center' }}
-        />
-        <ExternalLink href="https://reactnative.dev/docs/images">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Light and dark mode components">
-        <ThemedText>
-          This template has light and dark mode support. The{' '}
-          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
-          what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Animations">
-        <ThemedText>
-          This template includes an example of an animated component. The{' '}
-          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
-          the powerful{' '}
-          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
-            react-native-reanimated
-          </ThemedText>{' '}
-          library to create a waving hand animation.
-        </ThemedText>
-        {Platform.select({
-          ios: (
-            <ThemedText>
-              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText>{' '}
-              component provides a parallax effect for the header image.
-            </ThemedText>
-          ),
-        })}
-      </Collapsible>
-    </ParallaxScrollView>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.headerBg, borderBottomColor: colors.border }]}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>설정</Text>
+      </View>
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.section, { backgroundColor: colors.surfaceCard, borderColor: colors.border }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>데이터 관리</Text>
+          <TouchableOpacity
+            style={[
+              styles.resetButton,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+            onPress={openModal}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="refresh" size={22} color={colors.red} />
+            <Text style={[styles.resetButtonText, { color: colors.text }]}>데모 데이터 초기화</Text>
+          </TouchableOpacity>
+          <Text style={[styles.hint, { color: colors.textMuted }]}>
+            비밀번호 확인 후 재고 테이블 데이터가 삭제됩니다.
+          </Text>
+        </View>
+      </ScrollView>
+
+      {/* 비밀번호 확인 모달 */}
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeModal}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={closeModal}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalKeyboardView}
+          >
+            <View
+              style={[styles.modalContent, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onStartShouldSetResponder={() => true}
+            >
+              <Text style={[styles.modalTitle, { color: colors.text }]}>비밀번호 확인</Text>
+              <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
+                데모 데이터 초기화를 위해 비밀번호를 입력해주세요.
+              </Text>
+
+              <TextInput
+                style={[
+                  styles.passwordInput,
+                  {
+                    backgroundColor: colors.surfaceAlt,
+                    borderColor: colors.border,
+                    color: colors.text,
+                  },
+                ]}
+                placeholder="비밀번호"
+                placeholderTextColor={colors.textMuted}
+                value={passwordInput}
+                onChangeText={(t) => {
+                  setPasswordInput(t);
+                  setErrorMessage('');
+                }}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              {errorMessage.length > 0 && (
+                <View style={[styles.messageBox, { backgroundColor: colors.errorMsgBg }]}>
+                  <Ionicons name="alert-circle" size={18} color={colors.errorMsgText} />
+                  <Text style={[styles.messageText, { color: colors.errorMsgText }]}>
+                    {errorMessage}
+                  </Text>
+                </View>
+              )}
+
+              {successMessage.length > 0 && (
+                <View style={[styles.messageBox, { backgroundColor: colors.successMsgBg }]}>
+                  <Ionicons name="checkmark-circle" size={18} color={colors.successMsgText} />
+                  <Text style={[styles.messageText, { color: colors.successMsgText }]}>
+                    {successMessage}
+                  </Text>
+                </View>
+              )}
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton, { borderColor: colors.border }]}
+                  onPress={closeModal}
+                  disabled={resetting}
+                >
+                  <Text style={[styles.cancelButtonText, { color: colors.textSecondary }]}>취소</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.confirmButton, { backgroundColor: colors.red }]}
+                  onPress={handleReset}
+                  disabled={resetting}
+                >
+                  {resetting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.confirmButtonText}>확인</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
+  container: {
+    flex: 1,
   },
-  titleContainer: {
+  header: {
+    paddingTop: 60,
+    paddingBottom: 18,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+  },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 100,
+  },
+  section: {
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  resetButton: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  resetButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  hint: {
+    fontSize: 13,
+    marginTop: 12,
+    lineHeight: 20,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalKeyboardView: {
+    width: '100%',
+    maxWidth: 360,
+  },
+  modalContent: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    marginBottom: 20,
+    lineHeight: 22,
+  },
+  passwordInput: {
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    marginBottom: 16,
+  },
+  messageBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  messageText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  modalButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  confirmButton: {},
+  confirmButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

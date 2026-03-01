@@ -38,7 +38,8 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      ["@react-native-voice/voice",{"microphonePermission":"품목 검색을 위해 마이크를 사용합니다.","speechRecognitionPermission":"음성 검색을 위해 음성 인식을 사용합니다."}],["expo-image-picker",{"cameraPermission":"현장 스냅샷 촬영을 위해 카메라 접근이 필요합니다.","photosPermission":"사진 첨부를 위해 사진 라이브러리 접근이 필요합니다."}]
     ],
     "experiments": {
       "typedRoutes": true,
